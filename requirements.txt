@@ -1,0 +1,7 @@
+aiogram==3.31.0
+fastapi==0.158.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.6
+APScheduler==3.11.3
+openai==3.36.0
+pydantic-settings==2.16.1
