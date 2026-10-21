@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api
+from app import api, public
 from app import services as sv
 from app.config import settings
 from app.db import SessionLocal
@@ -49,6 +49,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Картошка", lifespan=lifespan)
 app.include_router(api.router)
+app.include_router(public.router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

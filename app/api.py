@@ -54,7 +54,7 @@ def client_out(c: Client) -> dict:
 def order_out(o: Order) -> dict:
     return dict(
         id=o.id, date=o.date.isoformat(), status=o.status, payment=o.payment, via_friend=o.via_friend,
-        friend_fee=o.friend_fee, notes=o.notes, recurring_id=o.recurring_id, total=o.total,
+        friend_fee=o.friend_fee, notes=o.notes, recurring_id=o.recurring_id, total=o.total, source=o.source,
         client=client_out(o.client),
         items=[dict(product_id=i.product_id, name=i.product.name, emoji=i.product.emoji, unit=i.product.unit,
                     qty=i.qty, price=i.price, sum=round(i.qty * i.price)) for i in o.items],
@@ -317,6 +317,11 @@ def recurring_from_order(oid: int, every_days: int = 7, s: Session = Depends(get
 @router.get("/report")
 def get_report(start: date, end: date, s: Session = Depends(get_db), u: User = Depends(current_user)):
     return sv.report(s, start, end).as_dict()
+
+
+@router.get("/sources")
+def get_sources(start: date, end: date, s: Session = Depends(get_db), u: User = Depends(current_user)):
+    return sv.sources_stats(s, start, end)
 
 
 @router.get("/expenses")

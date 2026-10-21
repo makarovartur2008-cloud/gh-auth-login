@@ -81,6 +81,8 @@ class Order(Base):
     friend_fee: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")
     recurring_id: Mapped[int | None] = mapped_column(ForeignKey("recurring.id"), nullable=True)
+    # откуда заказ: пусто — внесли сами, иначе метка QR-листовки (например «Ленина 5») или «сайт»
+    source: Mapped[str] = mapped_column(String(60), default="")
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -165,8 +167,17 @@ def make_engine(path: str):
     return engine
 
 
+def migrate(engine):
+    """Добавляет новые колонки в уже существующую базу."""
+    with engine.begin() as conn:
+        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(orders)")}
+        if "source" not in cols:
+            conn.exec_driver_sql("ALTER TABLE orders ADD COLUMN source VARCHAR(60) DEFAULT '' NOT NULL")
+
+
 def init_db(engine) -> sessionmaker:
     Base.metadata.create_all(engine)
+    migrate(engine)
     Session = sessionmaker(engine, expire_on_commit=False)
     with Session() as s:
         if not s.query(Product).first():

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     morning_hour: int = 8
     evening_hour: int = 20
     friend_fee: int = 50
+    # Телефон на листовке и странице заказа (необязательно)
+    contact_phone: str = ""
     sack_kg: int = 25
 
     # Только для разработки: пускать в API без Telegram
