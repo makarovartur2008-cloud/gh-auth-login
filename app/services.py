@@ -83,8 +83,10 @@ def find_client(s: Session, phone: str = "", name: str = "") -> Client | None:
     return None
 
 
-def upsert_client(s: Session, data: dict, client_id: int | None = None) -> tuple[Client, bool]:
-    """Находит клиента по id или телефону, дополняет данные; иначе создаёт. Возвращает (клиент, создан_ли)."""
+def upsert_client(s: Session, data: dict, client_id: int | None = None,
+                  only_empty: bool = False) -> tuple[Client, bool]:
+    """Находит клиента по id или телефону, дополняет данные; иначе создаёт. Возвращает (клиент, создан_ли).
+    only_empty — для заявок с сайта: у существующего клиента заполняем только пустые поля."""
     data = {k: str(v).strip() for k, v in data.items() if k in CLIENT_FIELDS and v not in (None, "")}
     client = s.get(Client, client_id) if client_id else None
     if client is None:
@@ -94,8 +96,8 @@ def upsert_client(s: Session, data: dict, client_id: int | None = None) -> tuple
         client = Client(name=data.get("name") or "Без имени")
         s.add(client)
     for k, v in data.items():
-        if k == "name" and not created:
-            continue  # имя существующего клиента не перетираем
+        if not created and (k == "name" or (only_empty and getattr(client, k))):
+            continue  # имя (и при only_empty — заполненные поля) существующего клиента не перетираем
         setattr(client, k, v)
     s.flush()
     return client, created
@@ -160,6 +162,7 @@ def create_order(
     payment: str | None = None,
     created_by: int | None = None,
     recurring_id: int | None = None,
+    source: str = "",
 ) -> Order:
     order = Order(
         client=client,
@@ -169,6 +172,7 @@ def create_order(
         friend_fee=settings.friend_fee if via_friend else 0,
         created_by=created_by,
         recurring_id=recurring_id,
+        source=source,
     )
     s.add(order)
     set_items(s, order, items)
@@ -392,6 +396,8 @@ def order_text(o: Order, with_date: bool = False) -> str:
         extra.append(f"🤝 через друга (−{o.friend_fee} ₽)")
     if o.status == "done":
         extra.append(f"оплата: {PAYMENTS.get(o.payment, '—')}")
+    if o.source:
+        extra.append(f"🌐 {esc(o.source)}")
     if extra:
         lines.append(" · ".join(extra))
     note = (o.notes or "").replace("🔁 постоянный", "").strip()
@@ -428,3 +434,15 @@ def report_text(r: Report, title: str) -> str:
 
 def esc(t: str) -> str:
     return (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def sources_stats(s: Session, start: date, end: date) -> list[dict]:
+    """Сколько заказов пришло с каждой QR-листовки / сайта за период."""
+    out: dict[str, dict] = {}
+    for o in s.scalars(order_query().where(Order.date >= start, Order.date <= end, Order.source != "")):
+        d = out.setdefault(o.source, {"source": o.source, "orders": 0, "done": 0, "revenue": 0})
+        d["orders"] += 1
+        if o.status == "done":
+            d["done"] += 1
+            d["revenue"] += o.total
+    return sorted(out.values(), key=lambda d: -d["orders"])

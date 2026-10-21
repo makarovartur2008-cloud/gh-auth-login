@@ -370,8 +370,30 @@ async def broadcast_day(bot: Bot, offset: int):
             log.exception("broadcast to %s failed", tg_id)
 
 
+async def notify_order(order_id: int, header: str):
+    """Шлёт всем пользователям карточку нового заказа (например, пришедшего по QR)."""
+    if BOT is None:
+        return
+    with SessionLocal() as s:
+        o = s.scalar(sv.order_query().where(Order.id == order_id))
+        ids = [u.tg_id for u in sv.all_users(s)]
+        if not o:
+            return
+        text, kb = f"{header}\n\n" + sv.order_text(o, with_date=True), order_kb(o)
+    for tg_id in ids:
+        try:
+            await BOT.send_message(tg_id, text, reply_markup=kb)
+        except Exception:
+            log.exception("notify %s failed", tg_id)
+
+
+BOT: Bot | None = None
+
+
 def make_bot() -> tuple[Bot, Dispatcher]:
+    global BOT
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    BOT = bot
     dp = Dispatcher()
     dp.include_router(router)
     return bot, dp

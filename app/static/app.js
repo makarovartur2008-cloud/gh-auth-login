@@ -132,7 +132,8 @@ function orderCard(o, { overdue = false } = {}) {
   return h("div", { class: `card ${o.status}${overdue ? " overdue" : ""}` },
     h("div", { class: "row between" },
       h("div", { class: "grow", onclick: () => orderForm(o) },
-        h("div", { class: "name" }, c.name, " ", o.recurring_id ? "🔁" : "", o.via_friend ? " 🤝" : ""),
+        h("div", { class: "name" }, c.name, " ", o.recurring_id ? "🔁" : "", o.via_friend ? " 🤝" : "", o.source ? " 🌐" : ""),
+        o.source ? h("div", { class: "hint" }, "🌐 ", o.source) : null,
         overdue ? h("div", { class: "hint" }, "⚠️ не доставлен — ", dayLabel(o.date)) : null,
         c.label ? h("div", { class: "hint" }, "📍 ", c.label) : null),
       h("span", { class: "badge " + status[1] }, status[0])),
@@ -414,7 +415,8 @@ function periodRange(p) {
 async function renderMoney() {
   setTitle("Финансы");
   const [start, end] = periodRange(state.period);
-  const [r, exps, debts] = await Promise.all([api(`/report?start=${start}&end=${end}`), api(`/expenses?start=${start}&end=${end}`), api("/orders/debts")]);
+  const [r, exps, debts, sources] = await Promise.all([api(`/report?start=${start}&end=${end}`), api(`/expenses?start=${start}&end=${end}`),
+    api("/orders/debts"), api(`/sources?start=${start}&end=${end}`)]);
   const seg = h("div", { class: "seg" }, [["today", "Сегодня"], ["week", "Неделя"], ["month", "Месяц"], ["prev", "Прошлый мес."]].map(([k, t]) =>
     h("button", { class: state.period === k ? "active" : "", onclick: () => { state.period = k; renderMoney(); } }, t)));
   const line = (a, b, style) => h("div", { class: "line", style }, h("span", {}, a), h("span", {}, b));
@@ -435,6 +437,8 @@ async function renderMoney() {
       r.purchases ? h("div", { class: "hint", style: "margin-top:6px" }, `Закуплено товара за период: ${money(r.purchases)} (в прибыль не входит — учтено через закупочную стоимость)`) : null),
     Object.keys(r.by_product).length ? h("div", { class: "card" }, h("b", {}, "Продано"),
       Object.entries(r.by_product).map(([n, p]) => line(`${n}: ${qty(p.qty)} ${p.unit}`, money(p.revenue)))) : null,
+    sources.length ? h("div", { class: "card" }, h("b", {}, "🌐 Заказы с сайта / QR"),
+      sources.map((x) => line(`${x.source}: ${x.orders} заяв.` + (x.done ? `, доставлено ${x.done}` : ""), money(x.revenue)))) : null,
     debts.length ? h("h2", {}, `📝 Долги: ${money(debts.reduce((a, o) => a + o.total, 0))}`) : null,
     debts.map((o) => orderCard(o)),
     h("h2", {}, "Расходы"),
@@ -467,7 +471,22 @@ function expenseForm() {
 async function renderPrices() {
   setTitle("Цены и товары");
   state.products = await api("/products");
+  const qrLabel = h("input", { placeholder: "Метка: например «Ленина 5»" });
+  const openFlyer = () => {
+    const url = `${location.origin}/flyer?s=${encodeURIComponent(qrLabel.value.trim())}`;
+    if (tg?.openLink) tg.openLink(url); else window.open(url, "_blank");
+  };
+  const orderUrl = `${location.origin}/order`;
   fill(view(), 
+    h("div", { class: "card" },
+      h("b", {}, "🖨 Листовки с QR-кодом"),
+      h("p", { class: "hint", style: "margin:4px 0 8px" },
+        "Клиент сканирует код — открывается страница заказа, заявка приходит в бот. " +
+        "Для каждого дома делай свою метку — в «Финансах» будет видно, откуда заказы."),
+      qrLabel,
+      h("div", { class: "actions" },
+        h("button", { class: "primary", onclick: openFlyer }, "Открыть листовку для печати"),
+        h("button", { onclick: async () => { try { await navigator.clipboard.writeText(orderUrl); toast("Ссылка скопирована"); } catch (_) { toast(orderUrl); } } }, "📋 Ссылка для Авито"))),
     h("p", { class: "hint" }, "Цена — за сколько продаёшь, закупка — за сколько берёшь (для расчёта прибыли). Нажми на товар, чтобы изменить."),
     h("div", { class: "card" }, state.products.map((p) => h("div", { class: "list-item", onclick: () => productForm(p), style: p.active ? "" : "opacity:.5" },
       h("div", { class: "grow" }, h("div", { class: "name" }, `${p.emoji} ${p.name}`),
