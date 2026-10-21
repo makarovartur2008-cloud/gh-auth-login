@@ -139,14 +139,14 @@ class Expense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
-# Начальный прайс. Цены 0 — значит ещё не заданы, меняются в приложении во вкладке «Цены».
+# Начальный прайс. Меняется в приложении во вкладке «Цены». Мёд свой — закупка 0.
 DEFAULT_PRODUCTS = [
     dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
     dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
-    dict(name="Лук", unit="кг", price=0, cost=20, emoji="🧅"),
+    dict(name="Лук", unit="кг", price=50, cost=20, emoji="🧅"),
     dict(name="Лук красный", unit="кг", price=80, cost=20, emoji="🧅"),
-    dict(name="Морковь", unit="кг", price=40, cost=27, emoji="🥕"),
-    dict(name="Морковь мытая", unit="кг", price=70, cost=27, emoji="🥕"),
+    dict(name="Морковь", unit="кг", price=40, cost=25, emoji="🥕"),
+    dict(name="Морковь мытая", unit="кг", price=70, cost=45, emoji="🥕"),
     dict(name="Свёкла", unit="кг", price=40, cost=22, emoji="🟣"),
     dict(name="Мёд липовый 1 л", unit="шт", price=700, cost=0, emoji="🍯"),
     dict(name="Мёд липовый 3 л", unit="шт", price=2000, cost=0, emoji="🍯"),
