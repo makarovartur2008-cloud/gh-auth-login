@@ -98,3 +98,11 @@ def test_migration_adds_source_column():
     with engine.begin() as conn:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(orders)"))}
     assert "source" in cols
+
+
+def test_flyer_phone_above_qr(client, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "contact_phone", "89001234567")
+    html = client.get("/flyer").text
+    assert "+7 900 123-45-67" in html
+    assert html.index("+7 900 123-45-67") < html.index('<div class="qr">')
