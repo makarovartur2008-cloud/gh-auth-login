@@ -65,7 +65,8 @@ def info(s: Session = Depends(get_db)):
         sack_kg=settings.sack_kg,
         days=[dict(date=(t + timedelta(days=i)).isoformat(), label=sv.fmt_date(t + timedelta(days=i)))
               for i in range(DAYS_AHEAD)],
-        products=[dict(id=p.id, name=p.name, unit=p.unit, price=p.price, min_qty=p.min_qty, emoji=p.emoji)
+        products=[dict(id=p.id, name=p.name, unit=p.unit, price=p.price, min_qty=p.min_qty, emoji=p.emoji,
+                       potato=sv.is_potato(p))
                   for p in public_products(s)],
     )
 
@@ -111,6 +112,8 @@ async def create_public_order(body: PublicOrder, request: Request, s: Session = 
         if p.min_qty and it.qty < p.min_qty:
             raise HTTPException(400, f"{p.name} — от {sv.fmt_qty(p.min_qty)} {p.unit}")
         items.append({"product_id": p.id, "qty": it.qty, "price": p.price})
+    if not any(sv.is_potato(allowed[i["product_id"]]) for i in items):
+        raise HTTPException(400, f"Возим только вместе с картошкой — добавьте от 2 сеток ({2 * settings.sack_kg} кг)")
     if rate_limited(client_ip(request)):
         raise HTTPException(429, "Слишком много заявок. Позвоните нам или попробуйте позже.")
 
@@ -165,7 +168,7 @@ def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
 <section class="a5">
   <div class="left">
     <h1>🥔 Картошка<br>с доставкой на дом</h1>
-    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Овощи и липовый мёд — привезём в удобный вам день</p>
+    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Заказ от 2 сеток картошки (50 кг) — лук, морковь, свёклу и мёд добавим к ней</p>
     <ul class="prices">{''.join(prices)}</ul>
     <p class="pay">Оплата при получении: наличные или перевод</p>
   </div>

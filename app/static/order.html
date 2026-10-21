@@ -39,6 +39,7 @@
     .bar .sum { flex: 1; } .bar .sum b { font-size: 20px; display: block; }
     .bar button { border: 0; border-radius: 14px; background: var(--green); color: #fff; font: inherit; font-weight: 700; padding: 14px 22px; cursor: pointer; }
     .bar button:disabled { opacity: .5; }
+    .note { color: var(--text); background: var(--green2); border-radius: 12px; padding: 10px 12px; }
     .err { color: var(--red); font-size: 14px; margin-top: 8px; }
     .done { text-align: center; padding-top: 60px; }
     .done .big { font-size: 64px; }
@@ -52,6 +53,7 @@
   <p class="sub phone" id="phone"></p>
 
   <h2>1. Что привезти</h2>
+  <p class="sub note">🥔 Возим только вместе с картошкой: от 2 сеток (50 кг). Лук, морковь, свёклу и мёд добавим к заказу.</p>
   <div class="card" id="products">Загрузка…</div>
 
   <h2>2. Когда привезти</h2>
@@ -129,8 +131,10 @@ function renderProducts() {
   }));
   const total = info.products.reduce((a, p) => a + (qty[p.id] || 0) * p.price, 0);
   $("total").textContent = money(total);
-  $("send").disabled = total <= 0;
+  $("send").disabled = !hasPotato();
 }
+
+function hasPotato() { return info.products.some((p) => p.potato && qty[p.id] > 0); }
 
 function renderDays() {
   $("days").replaceChildren(...info.days.map((d) =>
@@ -145,6 +149,7 @@ async function send() {
     comment: $("comment").value.trim(), website: $("website").value, date: day, source,
     items: Object.entries(qty).filter(([, q]) => q > 0).map(([id, q]) => ({ product_id: +id, qty: q })),
   };
+  if (!hasPotato()) return showErr("Добавьте картошку — от 2 сеток (50 кг), остальное привезём вместе с ней");
   if (!body.name) return showErr("Укажите имя", "name");
   if (body.phone.replace(/\D/g, "").length < 10) return showErr("Укажите телефон, чтобы мы могли позвонить", "tel");
   if (body.address.length < 3) return showErr("Укажите адрес", "address");

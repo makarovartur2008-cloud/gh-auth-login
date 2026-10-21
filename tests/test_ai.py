@@ -48,3 +48,10 @@ def test_bad_json():
 def test_prompt_mentions_products(s):
     p = ai.build_prompt(s)
     assert "Картошка белая" in p and "25 кг" in p
+
+
+def test_preview_warns_without_potato(s):
+    carrot = s.query(Product).filter_by(name="Морковь").one()
+    parsed = ai.parse_json(json.dumps({"actions": [{"type": "order", "client": {"name": "Петя"},
+                                                    "items": [{"product_id": carrot.id, "qty": 5}]}]}))
+    assert "без картошки" in ai.preview(s, parsed)

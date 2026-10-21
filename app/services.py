@@ -62,6 +62,11 @@ def all_users(s: Session) -> list[User]:
 # ---------- товары ----------
 
 
+def is_potato(p: Product) -> bool:
+    """Без картошки не возим: остальные товары — только в дополнение к ней."""
+    return "картош" in p.name.lower()
+
+
 def products(s: Session, only_active: bool = True) -> list[Product]:
     q = select(Product).order_by(Product.sort, Product.id)
     if only_active:

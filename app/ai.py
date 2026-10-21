@@ -211,6 +211,8 @@ def preview(s: Session, p: Parsed) -> str:
                              f"{sv.fmt_qty(price)} = {sv.fmt_money(it.qty * price)}{warn}")
             if not a.items:
                 lines.append("⚠️ товары не указаны")
+            elif not any((p := s.get(Product, it.product_id)) and sv.is_potato(p) for it in a.items):
+                lines.append("⚠️ без картошки — такой заказ не возим")
             lines.append(f"💰 {sv.fmt_money(total)}")
             if a.status == "done":
                 lines.append(f"оплата: {sv.PAYMENTS.get(a.payment or 'cash')}")
