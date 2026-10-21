@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Картошка</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=1">
+</head>
+<body>
+  <header id="top">
+    <h1 id="title">Заказы</h1>
+  </header>
+  <main id="view"></main>
+  <nav id="tabs">
+    <button data-tab="orders" class="active"><span>📋</span>Заказы</button>
+    <button data-tab="clients"><span>👥</span>Клиенты</button>
+    <button data-tab="money"><span>💰</span>Финансы</button>
+    <button data-tab="prices"><span>🏷️</span>Цены</button>
+  </nav>
+  <div id="sheet" hidden>
+    <div class="sheet-bg"></div>
+    <div class="sheet-body"></div>
+  </div>
+  <div id="toast" hidden></div>
+  <script src="/static/app.js?v=1"></script>
+</body>
+</html>

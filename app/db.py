@@ -1,0 +1,180 @@
+import os
+from datetime import date, datetime
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    event,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+
+from app.config import settings
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tg_id: Mapped[int] = mapped_column(Integer, unique=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    role: Mapped[str] = mapped_column(String(10), default="member")  # owner | member
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Invite(Base):
+    __tablename__ = "invites"
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Product(Base):
+    __tablename__ = "products"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    unit: Mapped[str] = mapped_column(String(10), default="кг")  # кг | шт
+    price: Mapped[float] = mapped_column(Float, default=0)  # цена продажи за единицу
+    cost: Mapped[float] = mapped_column(Float, default=0)  # закупка за единицу
+    min_qty: Mapped[float] = mapped_column(Float, default=0)
+    emoji: Mapped[str] = mapped_column(String(8), default="")
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Client(Base):
+    __tablename__ = "clients"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    phone: Mapped[str] = mapped_column(String(30), default="")
+    address: Mapped[str] = mapped_column(String(200), default="")
+    entrance: Mapped[str] = mapped_column(String(10), default="")
+    floor: Mapped[str] = mapped_column(String(10), default="")
+    apartment: Mapped[str] = mapped_column(String(10), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    orders: Mapped[list["Order"]] = relationship(back_populates="client")
+    recurring: Mapped[list["Recurring"]] = relationship(back_populates="client")
+
+
+class Order(Base):
+    __tablename__ = "orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
+    date: Mapped[date] = mapped_column(Date, index=True)
+    # new — ждёт доставки, done — доставлен, cancelled — отменён
+    status: Mapped[str] = mapped_column(String(10), default="new")
+    # cash | transfer | debt (в долг) | None
+    payment: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    via_friend: Mapped[bool] = mapped_column(Boolean, default=False)
+    friend_fee: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    recurring_id: Mapped[int | None] = mapped_column(ForeignKey("recurring.id"), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    client: Mapped[Client] = relationship(back_populates="orders")
+    items: Mapped[list["OrderItem"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan", order_by="OrderItem.id"
+    )
+
+    @property
+    def total(self) -> int:
+        return round(sum(i.qty * i.price for i in self.items))
+
+    @property
+    def cogs(self) -> int:
+        return round(sum(i.qty * i.cost for i in self.items))
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    qty: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    cost: Mapped[float] = mapped_column(Float, default=0)
+
+    order: Mapped[Order] = relationship(back_populates="items")
+    product: Mapped[Product] = relationship()
+
+
+class Recurring(Base):
+    """Постоянный клиент: заказ повторяется каждые every_days дней."""
+
+    __tablename__ = "recurring"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
+    every_days: Mapped[int] = mapped_column(Integer, default=7)
+    next_date: Mapped[date] = mapped_column(Date)
+    # [{"product_id": 1, "qty": 50, "price": 45}]
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    client: Mapped[Client] = relationship(back_populates="recurring")
+
+
+class Expense(Base):
+    __tablename__ = "expenses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    # fuel — газ/бензин, purchase — закупка товара, other — прочее
+    category: Mapped[str] = mapped_column(String(10), default="other")
+    amount: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+# Начальный прайс. Цены 0 — значит ещё не заданы, меняются в приложении во вкладке «Цены».
+DEFAULT_PRODUCTS = [
+    dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
+    dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
+    dict(name="Лук", unit="кг", price=0, cost=20, emoji="🧅"),
+    dict(name="Лук красный", unit="кг", price=0, cost=20, emoji="🧅"),
+    dict(name="Морковь", unit="кг", price=0, cost=27, emoji="🥕"),
+    dict(name="Морковь мытая", unit="кг", price=0, cost=27, emoji="🥕"),
+    dict(name="Свёкла", unit="кг", price=0, cost=22, emoji="🟣"),
+    dict(name="Мёд липовый 1 л", unit="шт", price=700, cost=0, emoji="🍯"),
+    dict(name="Мёд липовый 3 л", unit="шт", price=2000, cost=0, emoji="🍯"),
+]
+
+
+def make_engine(path: str):
+    if path != ":memory:":
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+
+    @event.listens_for(engine, "connect")
+    def _fk(conn, _):
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    return engine
+
+
+def init_db(engine) -> sessionmaker:
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(engine, expire_on_commit=False)
+    with Session() as s:
+        if not s.query(Product).first():
+            for i, p in enumerate(DEFAULT_PRODUCTS):
+                s.add(Product(sort=i, **p))
+            s.commit()
+    return Session
+
+
+engine = make_engine(settings.db_path)
+SessionLocal = init_db(engine)
