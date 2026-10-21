@@ -145,7 +145,7 @@ class Expense(Base):
 DEFAULT_PRODUCTS = [
     dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
     dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
-    dict(name="Лук", unit="кг", price=50, cost=20, emoji="🧅"),
+    dict(name="Лук", unit="кг", price=40, cost=20, emoji="🧅"),
     dict(name="Лук красный", unit="кг", price=80, cost=20, emoji="🧅"),
     dict(name="Морковь", unit="кг", price=40, cost=25, emoji="🥕"),
     dict(name="Морковь мытая", unit="кг", price=70, cost=45, emoji="🥕"),

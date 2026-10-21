@@ -170,9 +170,9 @@ def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
     <p class="pay">Оплата при получении: наличные или перевод</p>
   </div>
   <div class="right">
+    {f'<p class="phone">📞 Звоните<b>{escape(phone)}</b></p>' if phone else ''}
     <div class="qr">{qr}</div>
-    <p class="scan">Наведите камеру телефона<br>на код и оформите заказ</p>
-    {f'<p class="phone">или звоните: <b>{escape(phone)}</b></p>' if phone else ''}
+    <p class="scan">{'или наведите' if phone else 'Наведите'} камеру<br>на код и закажите онлайн</p>
   </div>
 </section>"""
     page = f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
@@ -198,7 +198,8 @@ h1 {{ font-size: 27pt; line-height: 1.05; margin: 0 0 3mm; color: #2e5e1e; }}
   background: #f4f8ef; border-radius: 6mm; padding: 6mm; }}
 .qr svg {{ width: 54mm; height: 54mm; display: block; }}
 .scan {{ font-size: 11.5pt; font-weight: 700; margin: 4mm 0 0; }}
-.phone {{ font-size: 10.5pt; margin: 3mm 0 0; }}
+.phone {{ font-size: 11pt; margin: 0 0 4mm; }}
+.phone b {{ display: block; font-size: 17pt; white-space: nowrap; }}
 @media print {{ body {{ background: #fff; }} .tip {{ display: none; }} .sheet {{ margin: 0; }} }}
 </style></head><body>
 <div class="tip">На листе A4 две листовки A5 — после печати разрежьте по пунктиру.
