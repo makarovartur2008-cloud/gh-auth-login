@@ -272,8 +272,10 @@ async function orderForm(order, preset = {}) {
   const totalEl = h("div", { class: "line total" });
   function drawTotal() {
     const t = items.reduce((a, i) => a + (i.qty || 0) * (i.price || 0), 0);
-    const warn = items.some((i) => { const p = products.find((x) => x.id === i.product_id); return p?.min_qty && i.qty < p.min_qty; });
-    fill(totalEl, h("span", {}, "Итого", warn ? h("span", { class: "hint" }, " (⚠️ картошка от 50 кг)") : ""), h("span", {}, money(t)));
+    const prod = (i) => products.find((x) => x.id === i.product_id);
+    const warn = items.some((i) => prod(i)?.min_qty && i.qty < prod(i).min_qty) ? " (⚠️ картошка от 50 кг)"
+      : !items.some((i) => i.qty > 0 && /картош/i.test(prod(i)?.name || "")) ? " (⚠️ без картошки не возим)" : "";
+    fill(totalEl, h("span", {}, "Итого", warn ? h("span", { class: "hint" }, warn) : ""), h("span", {}, money(t)));
   }
   drawItems();
 

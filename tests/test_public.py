@@ -106,3 +106,12 @@ def test_flyer_phone_above_qr(client, monkeypatch):
     html = client.get("/flyer").text
     assert "+7 900 123-45-67" in html
     assert html.index("+7 900 123-45-67") < html.index('<div class="qr">')
+
+
+def test_order_without_potato_rejected(client):
+    p = ids()
+    r = client.post("/api/public/order", json=body(items=[{"product_id": p["Морковь"], "qty": 5}]))
+    assert r.status_code == 400 and "картошк" in r.json()["detail"]
+    with SessionLocal() as s:
+        assert s.query(Order).count() == 0
+    assert all("potato" in x for x in client.get("/api/public/info").json()["products"])
