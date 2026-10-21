@@ -165,7 +165,7 @@ def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
 <section class="a5">
   <div class="left">
     <h1>🥔 Картошка<br>с доставкой на дом</h1>
-    <p class="sub">По городу и пригороду · каждый день<br>Овощи и липовый мёд — привезём в удобный вам день</p>
+    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Овощи и липовый мёд — привезём в удобный вам день</p>
     <ul class="prices">{''.join(prices)}</ul>
     <p class="pay">Оплата при получении: наличные или перевод</p>
   </div>

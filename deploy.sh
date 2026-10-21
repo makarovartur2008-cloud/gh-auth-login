@@ -11,7 +11,8 @@ fi
 if [ ! -f .env ]; then
   read -rp "Токен бота от @BotFather: " BOT_TOKEN
   read -rp "Ключ ИИ (ProxyAPI): " AI_API_KEY
-  read -rp "Телефон для листовок (Enter — не указывать): " CONTACT_PHONE
+  read -rp "Телефон для листовок [89083003917]: " CONTACT_PHONE
+  CONTACT_PHONE="${CONTACT_PHONE:-89083003917}"
   IP=$(curl -fsS https://api.ipify.org)
   DOMAIN="${IP//./-}.sslip.io"
   sed -e "s|^BOT_TOKEN=.*|BOT_TOKEN=${BOT_TOKEN}|" \
