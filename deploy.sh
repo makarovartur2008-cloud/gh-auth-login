@@ -13,12 +13,16 @@ if [ ! -f .env ]; then
   read -rp "Ключ ИИ (ProxyAPI): " AI_API_KEY
   read -rp "Телефон для листовок [89083003917]: " CONTACT_PHONE
   CONTACT_PHONE="${CONTACT_PHONE:-89083003917}"
+  read -rp "Город (для поиска адресов на карте), например Екатеринбург: " CITY
+  read -rp "Откуда выезжаешь (улица, дом; можно пусто): " DEPOT_ADDRESS
   IP=$(curl -fsS https://api.ipify.org)
   DOMAIN="${IP//./-}.sslip.io"
   sed -e "s|^BOT_TOKEN=.*|BOT_TOKEN=${BOT_TOKEN}|" \
       -e "s|^AI_API_KEY=.*|AI_API_KEY=${AI_API_KEY}|" \
       -e "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" \
       -e "s|^CONTACT_PHONE=.*|CONTACT_PHONE=${CONTACT_PHONE}|" \
+      -e "s|^CITY=.*|CITY=${CITY}|" \
+      -e "s|^DEPOT_ADDRESS=.*|DEPOT_ADDRESS=${DEPOT_ADDRESS}|" \
       -e "s|^WEBAPP_URL=.*|WEBAPP_URL=https://${DOMAIN}|" \
       .env.example > .env
   echo "Адрес приложения: https://${DOMAIN}"
