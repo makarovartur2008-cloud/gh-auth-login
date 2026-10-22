@@ -73,17 +73,33 @@ def status_kind(o: Order) -> str:
     return "eta" if sv.eta_text(o) else "accepted"
 
 
-def message_text(o: Order, kind: str) -> str:
+def _move_hint(o: Order) -> str:
+    """Ссылка, по которой клиент сам переносит доставку."""
+    from app import reschedule
+
+    url = reschedule.link(o)
+    return f"\nНеудобно время? Перенести: {url}" if url else ""
+
+
+def _when_text(o: Order) -> str:
+    """Время для клиента: окно по маршруту, а для вечернего рейса без маршрута — окно рейса."""
     eta = sv.eta_text(o)
+    if not eta and o.slot == "evening":
+        eta = f"вечером {sv.evening_window()}"
+    return eta
+
+
+def message_text(o: Order, kind: str) -> str:
+    eta = _when_text(o)
     if kind == "accepted":
         when = f"Привезём {sv.fmt_date(o.date)}" + (f", {eta}." if eta else ".")
         if not eta:
             when += (" Перед приездом позвоним." if o.date <= sv.today()
                      else " Точное время сообщим накануне вечером.")
-        return f"Заказ №{o.id} принят! {when} Сумма: {sv.fmt_money(o.total)}.{_questions()}"
+        return f"Заказ №{o.id} принят! {when} Сумма: {sv.fmt_money(o.total)}.{_questions()}{_move_hint(o)}"
     if kind == "eta":
         when = f", {eta}" if eta else ""
-        return f"{_eta_head(o)}{when}. Сумма: {sv.fmt_money(o.total)}.{_questions()}"
+        return f"{_eta_head(o)}{when}. Сумма: {sv.fmt_money(o.total)}.{_questions()}{_move_hint(o)}"
     if kind == "on_the_way":
         return f"Выехал к вам, буду минут через 15–30.{_questions()}"
     raise ValueError(kind)
@@ -118,12 +134,12 @@ def auto_reply_text() -> str:
 # ---------- каналы ----------
 
 
-async def send_tg(chat_id: int, text: str):
+async def send_tg(chat_id: int, text: str, reply_markup=None):
     from app import bot as tgbot
 
     if tgbot.BOT is None:
         raise RuntimeError("Telegram-бот не запущен")
-    await tgbot.BOT.send_message(chat_id, text, parse_mode=None)
+    await tgbot.BOT.send_message(chat_id, text, parse_mode=None, reply_markup=reply_markup)
 
 
 async def send_max(chat_ref: str, text: str):

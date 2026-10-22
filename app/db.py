@@ -102,6 +102,10 @@ class Order(Base):
     token: Mapped[str] = mapped_column(String(24), default=lambda: secrets.token_urlsafe(12))
     # клиенту уже отправили «завтра привезём, примерно …» (сбрасывается при переносе)
     eta_notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    # рейс: "" — дневной (от ROUTE_START), "evening" — вечерний (EVENING_START–EVENING_END)
+    slot: Mapped[str] = mapped_column(String(10), default="")
+    # подарок за перенос: carrot | beet | onion (строка-подарок с ценой 0 в items)
+    bonus: Mapped[str] = mapped_column(String(10), default="")
 
     client: Mapped[Client] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(
@@ -143,6 +147,31 @@ class Recurring(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     client: Mapped[Client] = relationship(back_populates="recurring")
+
+
+class Reschedule(Base):
+    """Перенос доставки: предложение клиенту (kind=staff) или перенос самим клиентом (kind=client)."""
+
+    __tablename__ = "reschedules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="staff")
+    # [{"date": "2026-10-23", "slot": "", "label": "Завтра днём"}, ...]
+    options: Mapped[list] = mapped_column(JSON, default=list)
+    # из чего клиент выбирает подарок: ["carrot", "beet", "onion"]; [] — подарок уже решён или без него
+    bonus_choices: Mapped[list] = mapped_column(JSON, default=list)
+    old_date: Mapped[date] = mapped_column(Date)
+    old_slot: Mapped[str] = mapped_column(String(10), default="")
+    old_eta: Mapped[str] = mapped_column(String(20), default="")
+    # pending — ждём ответа, answered — клиент (или мы за него) выбрал
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+    chosen: Mapped[int | None] = mapped_column(Integer, nullable=True)  # индекс в options
+    reminded: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    order: Mapped["Order"] = relationship()
 
 
 class Expense(Base):
@@ -191,6 +220,8 @@ NEW_COLUMNS = [
     ("orders", "eta_to", "VARCHAR(5) DEFAULT '' NOT NULL"),
     ("orders", "token", "VARCHAR(24) DEFAULT '' NOT NULL"),
     ("orders", "eta_notified", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("orders", "slot", "VARCHAR(10) DEFAULT '' NOT NULL"),
+    ("orders", "bonus", "VARCHAR(10) DEFAULT '' NOT NULL"),
     ("clients", "lat", "FLOAT"),
     ("clients", "lon", "FLOAT"),
     ("clients", "geo_address", "VARCHAR(250) DEFAULT '' NOT NULL"),

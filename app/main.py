@@ -39,6 +39,10 @@ async def lifespan(_: FastAPI):
         bot, dp = make_bot()
         scheduler.add_job(broadcast_day, "cron", hour=settings.morning_hour, minute=0, args=[bot, 0])
         scheduler.add_job(broadcast_day, "cron", hour=settings.evening_hour, minute=0, args=[bot, 1])
+        # кто не ответил на перенос доставки — напомнить (app/reschedule.py)
+        from app.bot import remind_reschedules
+
+        scheduler.add_job(remind_reschedules, "interval", minutes=10, args=[bot])
         try:
             notify.TG_BOT_USERNAME = (await bot.get_me()).username or ""
         except Exception:
