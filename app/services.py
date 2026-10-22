@@ -374,6 +374,16 @@ def period(name: str) -> tuple[date, date]:
     return t, t
 
 
+# ---------- время доставки ----------
+
+
+def eta_text(o: Order) -> str:
+    """«примерно 14:00–15:00» или пусто, если маршрут ещё не считали."""
+    if o.eta_from and o.eta_to:
+        return f"примерно {o.eta_from}–{o.eta_to}"
+    return ""
+
+
 # ---------- тексты для бота ----------
 
 STATUS_ICON = {"new": "🟡", "done": "✅", "cancelled": "❌"}
