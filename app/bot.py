@@ -165,14 +165,46 @@ async def remove(m: Message, command: CommandObject):
 # ---------- списки ----------
 
 
+def fmt_duration(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    return f"{h} ч {m} мин" if h else f"{m} мин"
+
+
+def route_head(plan, stops: int) -> str:
+    """Строка о маршруте в шапке списка: выезд, км, время, ссылка на Яндекс Карты."""
+    text = f"🧭 <b>Маршрут:</b> выезд {plan.departure}"
+    if plan.total_km:
+        text += f", ≈ {plan.total_km:g} км"
+    if plan.total_min:
+        text += f", ≈ {fmt_duration(plan.total_min)}"
+    if not plan.osrm and stops > 1 and plan.total_km:
+        text += " (по прямой)"
+    if plan.yandex_url:
+        text += f'\n<a href="{sv.esc(plan.yandex_url)}">🗺 Открыть маршрут в Яндекс Картах</a>'
+    text += "\n<i>Время примерное, без учёта пробок.</i>"
+    return text
+
+
 async def send_day(bot: Bot, chat_id: int, offset: int):
+    from aiogram.types import LinkPreviewOptions
+
+    from app import routing
+
     day = sv.today() + timedelta(days=offset)
     with SessionLocal() as s:
         sv.generate_recurring(s)
+        # порядок объезда и примерное время на каждый адрес
+        try:
+            active = await routing.plan_day(s, day)
+            plan = routing.last_plan(day)
+        except Exception:
+            log.exception("route planning failed")
+            s.rollback()
+            active, plan = [o for o in sv.orders_on(s, day) if o.status == "new"], None
         orders = sv.orders_on(s, day)
         overdue = sv.open_orders_before(s, sv.today()) if offset == 0 else []
-        active = [o for o in orders if o.status == "new"]
         head = f"{'📋' if offset == 0 else '📅'} <b>Доставки — {sv.fmt_date(day)}</b>\n"
+        kb = None
         if not orders:
             head += "Заказов нет."
         else:
@@ -186,12 +218,41 @@ async def send_day(bot: Bot, chat_id: int, offset: int):
             if load:
                 head += "\n\n<b>Загрузить:</b>\n" + "\n".join(
                     f"• {sv.esc(n)}: {sv.fmt_qty(q)}" for n, q in load.items())
-        await bot.send_message(chat_id, head)
+            if active and plan:
+                head += "\n\n" + route_head(plan, len(active))
+                kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔄 Пересчитать маршрут", callback_data=f"route:{day.isoformat()}")]])
+        await bot.send_message(chat_id, head, reply_markup=kb,
+                               link_preview_options=LinkPreviewOptions(is_disabled=True))
         for o in overdue:
             await bot.send_message(chat_id, "⚠️ <b>Не доставлен вовремя</b>\n" + sv.order_text(o, with_date=True),
                                    reply_markup=order_kb(o))
-        for o in orders:
-            await bot.send_message(chat_id, sv.order_text(o), reply_markup=order_kb(o))
+        # сначала открытые заказы по маршруту, потом уже доставленные
+        for o in active + [o for o in orders if o.status != "new"]:
+            text = sv.order_text(o)
+            if o.status == "new" and o.route_pos and plan:
+                pre = f"<b>Точка {o.route_pos} из {len(active)}</b>"
+                if o.client.lat is None:
+                    pre += "\n🗺❓ адрес не найден на карте — проверь"
+                text = pre + "\n" + text
+            await bot.send_message(chat_id, text, reply_markup=order_kb(o))
+
+
+@router.callback_query(F.data.startswith("route:"))
+async def route_cb(c: CallbackQuery):
+    from datetime import date
+
+    if not allowed(c.from_user.id):
+        return await c.answer()
+    try:
+        offset = (date.fromisoformat(c.data[6:]) - sv.today()).days
+    except ValueError:
+        return await c.answer()
+    if offset < 0:
+        return await c.answer("Этот день уже прошёл")
+    await c.answer("Пересчитываю маршрут…")
+    await c.message.edit_reply_markup(reply_markup=None)
+    await send_day(c.bot, c.message.chat.id, offset)
 
 
 @router.message(F.text == BTN_TODAY)

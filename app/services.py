@@ -399,6 +399,8 @@ def order_text(o: Order, with_date: bool = False) -> str:
     addr = client_label(c)
     if addr:
         lines.append(f"📍 {esc(addr)}")
+    if o.status == "new" and o.eta_from and o.eta_to:
+        lines.append(f"🕑 {o.eta_from}–{o.eta_to}")
     for i in o.items:
         p = i.product
         lines.append(f"{p.emoji or '•'} {esc(p.name)} — {fmt_qty(i.qty)} {p.unit} × {fmt_qty(i.price)} = "

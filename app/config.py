@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     route_start: str = "10:00"  # во сколько выезд
     service_min: int = 10  # минут на одну точку (поднять мешки, рассчитаться)
     eta_window_min: int = 60  # ширина окна, которое называем клиенту
+    # у бесплатных карт нет пробок — время в пути умножаем на этот коэффициент
+    traffic_factor: float = 1.3
 
     # --- Сообщения клиентам ---
     max_bot_token: str = ""  # бот в мессенджере MAX (dev.max.ru)
