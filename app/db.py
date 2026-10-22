@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import date, datetime
 
 from sqlalchemy import (
@@ -63,6 +64,13 @@ class Client(Base):
     apartment: Mapped[str] = mapped_column(String(10), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    # координаты адреса (заполняет app/routing.py); geo_address — для какого адреса посчитаны
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geo_address: Mapped[str] = mapped_column(String(250), default="")
+    # куда писать клиенту о заказе (заполняет app/notify.py, когда клиент подписался)
+    tg_chat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_chat_id: Mapped[str] = mapped_column(String(40), default="")
 
     orders: Mapped[list["Order"]] = relationship(back_populates="client")
     recurring: Mapped[list["Recurring"]] = relationship(back_populates="client")
@@ -86,6 +94,14 @@ class Order(Base):
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # маршрут: порядковый номер точки и окно прибытия «HH:MM» (заполняет app/routing.py)
+    route_pos: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    eta_from: Mapped[str] = mapped_column(String(5), default="")
+    eta_to: Mapped[str] = mapped_column(String(5), default="")
+    # секрет для ссылки «следить за заказом» (подписка клиента на сообщения)
+    token: Mapped[str] = mapped_column(String(24), default=lambda: secrets.token_urlsafe(12))
+    # клиенту уже отправили «завтра привезём, примерно …» (сбрасывается при переносе)
+    eta_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     client: Mapped[Client] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(
@@ -167,12 +183,32 @@ def make_engine(path: str):
     return engine
 
 
+# Колонки, добавленные после первого выпуска: (таблица, колонка, SQL-описание)
+NEW_COLUMNS = [
+    ("orders", "source", "VARCHAR(60) DEFAULT '' NOT NULL"),
+    ("orders", "route_pos", "INTEGER"),
+    ("orders", "eta_from", "VARCHAR(5) DEFAULT '' NOT NULL"),
+    ("orders", "eta_to", "VARCHAR(5) DEFAULT '' NOT NULL"),
+    ("orders", "token", "VARCHAR(24) DEFAULT '' NOT NULL"),
+    ("orders", "eta_notified", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("clients", "lat", "FLOAT"),
+    ("clients", "lon", "FLOAT"),
+    ("clients", "geo_address", "VARCHAR(250) DEFAULT '' NOT NULL"),
+    ("clients", "tg_chat_id", "INTEGER"),
+    ("clients", "max_chat_id", "VARCHAR(40) DEFAULT '' NOT NULL"),
+]
+
+
 def migrate(engine):
     """Добавляет новые колонки в уже существующую базу."""
     with engine.begin() as conn:
-        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(orders)")}
-        if "source" not in cols:
-            conn.exec_driver_sql("ALTER TABLE orders ADD COLUMN source VARCHAR(60) DEFAULT '' NOT NULL")
+        for table, col, ddl in NEW_COLUMNS:
+            cols = {r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+        # старым заказам — свои токены
+        for (oid,) in conn.exec_driver_sql("SELECT id FROM orders WHERE token = ''").fetchall():
+            conn.exec_driver_sql("UPDATE orders SET token = ? WHERE id = ?", (secrets.token_urlsafe(12), oid))
 
 
 def init_db(engine) -> sessionmaker:

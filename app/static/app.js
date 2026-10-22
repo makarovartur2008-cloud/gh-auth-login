@@ -7,7 +7,7 @@ if (tg && tg.initData) {
   document.documentElement.classList.add("tg");
 }
 
-const state = { tab: "orders", day: null, today: null, products: [], me: null, period: "today" };
+const state = { tab: "orders", day: null, today: null, products: [], me: null, period: "today", routes: {} };
 const PAY = { cash: "наличка", transfer: "перевод", debt: "в долг" };
 const EXP = { fuel: "⛽ газ/бензин", purchase: "📦 закупка товара", other: "🧾 прочее" };
 const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
@@ -107,7 +107,7 @@ function render() {
 
 // ---------- заказы ----------
 
-function orderCard(o, { overdue = false } = {}) {
+function orderCard(o, { overdue = false, stop = null } = {}) {
   const status = { new: ["🟡 ждёт", "yellow"], done: ["✅ " + (PAY[o.payment] || ""), o.payment === "debt" ? "red" : "green"],
     cancelled: ["❌ отменён", ""] }[o.status];
   const c = o.client;
@@ -135,8 +135,12 @@ function orderCard(o, { overdue = false } = {}) {
         h("div", { class: "name" }, c.name, " ", o.recurring_id ? "🔁" : "", o.via_friend ? " 🤝" : "", o.source ? " 🌐" : ""),
         o.source ? h("div", { class: "hint" }, "🌐 ", o.source) : null,
         overdue ? h("div", { class: "hint" }, "⚠️ не доставлен — ", dayLabel(o.date)) : null,
-        c.label ? h("div", { class: "hint" }, "📍 ", c.label) : null),
-      h("span", { class: "badge " + status[1] }, status[0])),
+        c.label ? h("div", { class: "hint" }, "📍 ", c.label) : null,
+        stop && !stop.geocoded ? h("div", { class: "hint warn" }, "🗺❓ адрес не найден на карте — проверь") : null),
+      h("div", { class: "badges" },
+        h("span", { class: "badge " + status[1] }, status[0]),
+        stop && stop.eta_from ? h("span", { class: "badge eta" }, `🕑 ${stop.eta_from}–${stop.eta_to}`) : null,
+        stop ? h("span", { class: "hint" }, `точка ${stop.pos}`) : null)),
     h("div", { class: "items", onclick: () => orderForm(o) },
       o.items.map((i) => h("div", {}, `${i.emoji || "•"} ${i.name} — ${qty(i.qty)} ${i.unit} × ${qty(i.price)} = ${money(i.sum)}`)),
       o.notes && o.notes !== "🔁 постоянный" ? h("div", { class: "hint" }, "📝 ", o.notes) : null,
@@ -152,7 +156,7 @@ function plannedCard(r) {
     h("div", { class: "row between" }, h("span", { class: "hint" }, `каждые ${r.every_days} дн.`), h("span", { class: "sum" }, money(r.total))));
 }
 
-async function renderOrders() {
+async function renderOrders(opts = {}) {
   setTitle("Заказы");
   const day = state.day;
   const start = addDays(state.today, -1);
@@ -173,9 +177,16 @@ async function renderOrders() {
   const load = {};
   active.forEach((o) => o.items.forEach((i) => (load[i.name] = (load[i.name] || 0) + i.qty)));
 
+  // маршрут: открытые заказы по порядку объезда, у каждого — примерное время
+  const route = active.length ? state.routes[day] : null;
+  const stops = {};
+  (route?.stops || []).forEach((st) => (stops[st.order_id] = st));
+  const pos = (o) => stops[o.id]?.pos ?? 1e9;
+  active.sort((a, b) => pos(a) - pos(b) || a.id - b.id);
+
   const list = [];
   data.overdue.forEach((o) => list.push(orderCard(o, { overdue: true })));
-  active.forEach((o) => list.push(orderCard(o)));
+  active.forEach((o) => list.push(orderCard(o, { stop: stops[o.id] })));
   data.planned.forEach((r) => list.push(plannedCard(r)));
   done.forEach((o) => list.push(orderCard(o)));
   data.orders.filter((o) => o.status === "cancelled").forEach((o) => list.push(orderCard(o)));
@@ -192,10 +203,44 @@ async function renderOrders() {
       ? h("div", { class: "card" }, h("div", { class: "hint" }, "Загрузить в машину"),
           Object.entries(load).map(([n, q]) => h("div", {}, `• ${n}: ${qty(q)}`)))
       : null,
+    active.length ? routeCard(day, route) : null,
     list.length ? list : h("div", { class: "empty" }, "На этот день заказов нет"),
   );
   strip.querySelector(".active")?.scrollIntoView({ inline: "center", block: "nearest" });
   document.body.append(h("button", { class: "primary fab", onclick: () => orderForm(null, { date: day }) }, "＋ Заказ"));
+  // маршрут считаем после показа списка: поиск новых адресов на карте может занять несколько секунд
+  if (active.length && !opts.routeFresh) loadRoute(day, false);
+}
+
+async function loadRoute(day, force) {
+  try {
+    state.routes[day] = await api(force ? `/route/plan?day=${day}` : `/route?day=${day}`, force ? { method: "POST" } : {});
+  } catch (_) { return; }
+  if (state.tab === "orders" && state.day === day) renderOrders({ routeFresh: true });
+  if (force) toast("Маршрут пересчитан");
+}
+
+const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)} ч ${m % 60} мин` : `${m} мин`);
+
+function openLink(url) {
+  if (tg?.openLink) tg.openLink(url);
+  else window.open(url, "_blank");
+}
+
+function routeCard(day, r) {
+  if (!r) return h("div", { class: "card route" }, h("div", { class: "name" }, "🧭 Маршрут"), h("div", { class: "hint" }, "Считаю маршрут…"));
+  const lost = r.stops.filter((st) => !st.geocoded).length;
+  const facts = [`выезд ${r.departure}`];
+  if (r.total_km) facts.push(`≈ ${r.total_km} км`);
+  if (r.total_min) facts.push(`≈ ${fmtMin(r.total_min)}`);
+  return h("div", { class: "card route" },
+    h("div", { class: "row between" }, h("div", { class: "name" }, "🧭 Маршрут"), h("span", { class: "hint" }, `${r.stops.length} точ.`)),
+    h("div", {}, facts.join(" · ")),
+    lost ? h("div", { class: "hint warn" }, `🗺❓ не найдено на карте: ${lost} — проверь адрес, эти точки в конце без времени`) : null,
+    h("div", { class: "hint" }, "Время примерное, без учёта пробок"),
+    h("div", { class: "actions" },
+      r.yandex_url ? h("button", { class: "primary small", onclick: () => openLink(r.yandex_url) }, "Открыть в Яндекс Картах") : null,
+      h("button", { class: "small", onclick: (e) => { haptic(); e.target.disabled = true; e.target.textContent = "Считаю…"; loadRoute(day, true); } }, "🔄 Пересчитать")));
 }
 
 // ---------- форма заказа ----------

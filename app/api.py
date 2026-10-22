@@ -263,7 +263,7 @@ def add_order(body: OrderIn, s: Session = Depends(get_db), u: User = Depends(cur
 def edit_order(oid: int, body: OrderPatch, s: Session = Depends(get_db), u: User = Depends(current_user)):
     o = s.scalar(sv.order_query().where(Order.id == oid)) or _404()
     if body.date:
-        o.date = body.date
+        sv.move_order(o, body.date)
     if body.items is not None:
         sv.set_items(s, o, [i.model_dump() for i in body.items])
     if body.notes is not None:
@@ -346,6 +346,33 @@ def delete_expense(eid: int, s: Session = Depends(get_db), u: User = Depends(cur
     s.delete(e)
     s.commit()
     return {"ok": True}
+
+
+# ---------- маршрут ----------
+
+
+def route_out(plan, route: list[Order]) -> dict:
+    return dict(
+        day=plan.day.isoformat(), departure=plan.departure, total_km=plan.total_km, total_min=plan.total_min,
+        yandex_url=plan.yandex_url, osrm=plan.osrm,
+        stops=[dict(order_id=o.id, pos=o.route_pos, eta_from=o.eta_from, eta_to=o.eta_to, name=o.client.name,
+                    address=sv.client_label(o.client), lat=o.client.lat, lon=o.client.lon,
+                    geocoded=o.client.lat is not None) for o in route],
+    )
+
+
+@router.get("/route")
+async def get_route(day: date, s: Session = Depends(get_db), u: User = Depends(current_user)):
+    from app import routing
+
+    return route_out(*await routing.get_plan(s, day))
+
+
+@router.post("/route/plan")
+async def plan_route(day: date, s: Session = Depends(get_db), u: User = Depends(current_user)):
+    from app import routing
+
+    return route_out(*await routing.get_plan(s, day, force=True))
 
 
 def _404():

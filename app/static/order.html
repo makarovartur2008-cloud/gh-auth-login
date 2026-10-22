@@ -44,6 +44,10 @@
     .done { text-align: center; padding-top: 60px; }
     .done .big { font-size: 64px; }
     .phone a { color: var(--green); font-weight: 600; text-decoration: none; }
+    .sub-btns { display: flex; flex-direction: column; gap: 10px; margin: 18px 0; }
+    .sub-btn { display: block; border-radius: 14px; padding: 15px 16px; font-weight: 700; text-decoration: none; color: #fff; }
+    .sub-btn.tg { background: #229ed9; }
+    .sub-btn.max { background: #7b4dff; }
   </style>
 </head>
 <body>
@@ -165,12 +169,22 @@ async function send() {
       el("div", { class: "big" }, "✅"), el("h1", {}, "Заказ принят!"),
       el("p", {}, `Доставка: ${dayLabel}. Сумма: ${money(data.total || 0)}.`),
       el("p", { class: "sub" }, "Мы позвоним, чтобы подтвердить время. Спасибо!"),
+      subscribeButtons(data),
       info.phone ? el("p", { class: "phone" }, "Вопросы: ", el("a", { href: "tel:" + info.phone.replace(/[^\d+]/g, "") }, info.phone)) : ""));
     window.scrollTo(0, 0);
   } catch (e) {
     showErr(e.message);
     $("send").disabled = false;
   }
+}
+
+// кнопки «получать статус заказа» — ссылки на ботов с секретом заказа (если боты настроены)
+function subscribeButtons(data) {
+  const links = [];
+  if (data.tg_link) links.push(el("a", { class: "sub-btn tg", href: data.tg_link, target: "_blank", rel: "noopener" }, "✈️ Получать статус заказа в Telegram"));
+  if (data.max_link) links.push(el("a", { class: "sub-btn max", href: data.max_link, target: "_blank", rel: "noopener" }, "💬 Получать статус заказа в MAX"));
+  if (!links.length) return "";
+  return el("div", {}, el("p", {}, "Пришлём, во сколько приедем, и сообщим, когда выедем:"), el("div", { class: "sub-btns" }, ...links));
 }
 
 function showErr(text, focusId) {

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api, public
+from app import api, notify, public
 from app import services as sv
 from app.config import settings
 from app.db import SessionLocal
@@ -30,21 +30,32 @@ async def lifespan(_: FastAPI):
     scheduler = AsyncIOScheduler(timezone=settings.zone)
     scheduler.add_job(recurring_job, "interval", hours=1)
     recurring_job()
-    polling = None
+    polling, max_polling = None, None
+    # вечером: маршрут на завтра и примерное время каждому клиенту
+    scheduler.add_job(notify.evening_eta, "cron", hour=settings.evening_hour, minute=5, args=[SessionLocal])
     if settings.bot_token:
         from app.bot import broadcast_day, make_bot
 
         bot, dp = make_bot()
         scheduler.add_job(broadcast_day, "cron", hour=settings.morning_hour, minute=0, args=[bot, 0])
         scheduler.add_job(broadcast_day, "cron", hour=settings.evening_hour, minute=0, args=[bot, 1])
+        try:
+            notify.TG_BOT_USERNAME = (await bot.get_me()).username or ""
+        except Exception:
+            log.exception("Не удалось узнать username бота — ссылки-подписки в Telegram не будут показаны")
         polling = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     else:
         log.warning("BOT_TOKEN не задан — бот не запущен, работает только приложение")
+    if settings.max_bot_token:
+        from app import max_bot
+
+        max_polling = asyncio.create_task(max_bot.poll_forever())
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
-    if polling:
-        polling.cancel()
+    for task in (polling, max_polling):
+        if task:
+            task.cancel()
 
 
 app = FastAPI(title="Картошка", lifespan=lifespan)

@@ -204,6 +204,16 @@ def set_status(order: Order, status: str, payment: str | None = None):
         order.payment = None
 
 
+def move_order(order: Order, day: date):
+    """Перенос на другой день: старое время доставки и «время уже сообщили» больше не годятся."""
+    if order.date == day:
+        return
+    order.date = day
+    order.route_pos = None
+    order.eta_from = order.eta_to = ""
+    order.eta_notified = False
+
+
 def orders_on(s: Session, day: date, include_cancelled: bool = False) -> list[Order]:
     q = order_query().where(Order.date == day).order_by(Order.id)
     if not include_cancelled:
@@ -374,6 +384,16 @@ def period(name: str) -> tuple[date, date]:
     return t, t
 
 
+# ---------- время доставки ----------
+
+
+def eta_text(o: Order) -> str:
+    """«примерно 14:00–15:00» или пусто, если маршрут ещё не считали."""
+    if o.eta_from and o.eta_to:
+        return f"примерно {o.eta_from}–{o.eta_to}"
+    return ""
+
+
 # ---------- тексты для бота ----------
 
 STATUS_ICON = {"new": "🟡", "done": "✅", "cancelled": "❌"}
@@ -385,10 +405,12 @@ def order_text(o: Order, with_date: bool = False) -> str:
     if with_date:
         lines.append(f"📅 {fmt_date(o.date)}")
     if c.phone:
-        lines.append(f"📞 {fmt_phone(c.phone)}")
+        lines.append(f"📞 {esc(fmt_phone(c.phone))}")
     addr = client_label(c)
     if addr:
         lines.append(f"📍 {esc(addr)}")
+    if o.status == "new" and o.eta_from and o.eta_to:
+        lines.append(f"🕑 {o.eta_from}–{o.eta_to}")
     for i in o.items:
         p = i.product
         lines.append(f"{p.emoji or '•'} {esc(p.name)} — {fmt_qty(i.qty)} {p.unit} × {fmt_qty(i.price)} = "
