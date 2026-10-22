@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import segno
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -16,7 +16,7 @@ from app import notify
 from app import services as sv
 from app.api import get_db
 from app.config import settings
-from app.db import Product
+from app.db import Order, Product, SessionLocal
 
 router = APIRouter()
 STATIC = Path(__file__).parent / "static"
@@ -92,7 +92,8 @@ class PublicOrder(BaseModel):
 
 
 @router.post("/api/public/order")
-async def create_public_order(body: PublicOrder, request: Request, s: Session = Depends(get_db)):
+async def create_public_order(body: PublicOrder, request: Request, background: BackgroundTasks,
+                              s: Session = Depends(get_db)):
     if body.website:  # заполнил скрытое поле — бот; делаем вид, что всё ок
         return {"ok": True, "id": 0}
     if len(sv.normalize_phone(body.phone)) != 11:
@@ -133,13 +134,21 @@ async def create_public_order(body: PublicOrder, request: Request, s: Session = 
                             source=body.source.strip() or "сайт")
     s.commit()
 
-    from app.bot import notify_order
     header = "🔔 <b>Новая заявка с сайта</b>" + ("" if created else " (клиент уже есть в базе)")
-    await notify_order(order.id, header)
-    # обычно дойдёт только SMS: в Telegram/MAX клиент подпишется через секунду, и статус придёт тогда
-    await notify.notify_client(s, order, "accepted")
+    # уведомления — после ответа клиенту, чтобы страница не ждала Telegram и SMS
+    background.add_task(notify_new_web_order, order.id, header)
     return {"ok": True, "id": order.id, "total": order.total, "token": order.token,
             "tg_link": notify.tg_link(order), "max_link": notify.max_link(order)}
+
+
+async def notify_new_web_order(order_id: int, header: str):
+    from app.bot import notify_order
+    await notify_order(order_id, header)
+    # обычно дойдёт только SMS: в Telegram/MAX клиент подпишется через секунду, и статус придёт тогда
+    with SessionLocal() as s:
+        order = s.scalar(sv.order_query().where(Order.id == order_id))
+        if order:
+            await notify.notify_client(s, order, "accepted")
 
 
 # ---------- QR и листовка ----------
