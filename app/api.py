@@ -263,7 +263,7 @@ def add_order(body: OrderIn, s: Session = Depends(get_db), u: User = Depends(cur
 def edit_order(oid: int, body: OrderPatch, s: Session = Depends(get_db), u: User = Depends(current_user)):
     o = s.scalar(sv.order_query().where(Order.id == oid)) or _404()
     if body.date:
-        o.date = body.date
+        sv.move_order(o, body.date)
     if body.items is not None:
         sv.set_items(s, o, [i.model_dump() for i in body.items])
     if body.notes is not None:

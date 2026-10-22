@@ -204,6 +204,16 @@ def set_status(order: Order, status: str, payment: str | None = None):
         order.payment = None
 
 
+def move_order(order: Order, day: date):
+    """Перенос на другой день: старое время доставки и «время уже сообщили» больше не годятся."""
+    if order.date == day:
+        return
+    order.date = day
+    order.route_pos = None
+    order.eta_from = order.eta_to = ""
+    order.eta_notified = False
+
+
 def orders_on(s: Session, day: date, include_cancelled: bool = False) -> list[Order]:
     q = order_query().where(Order.date == day).order_by(Order.id)
     if not include_cancelled:
@@ -395,7 +405,7 @@ def order_text(o: Order, with_date: bool = False) -> str:
     if with_date:
         lines.append(f"📅 {fmt_date(o.date)}")
     if c.phone:
-        lines.append(f"📞 {fmt_phone(c.phone)}")
+        lines.append(f"📞 {esc(fmt_phone(c.phone))}")
     addr = client_label(c)
     if addr:
         lines.append(f"📍 {esc(addr)}")

@@ -185,7 +185,7 @@ def route_head(plan, stops: int) -> str:
     return text
 
 
-async def send_day(bot: Bot, chat_id: int, offset: int):
+async def send_day(bot: Bot, chat_id: int, offset: int, force_route: bool = False):
     from aiogram.types import LinkPreviewOptions
 
     from app import routing
@@ -193,10 +193,10 @@ async def send_day(bot: Bot, chat_id: int, offset: int):
     day = sv.today() + timedelta(days=offset)
     with SessionLocal() as s:
         sv.generate_recurring(s)
-        # порядок объезда и примерное время на каждый адрес
+        # порядок объезда и примерное время на каждый адрес; пересчёт — только если заказы
+        # или адреса поменялись (или нажали «Пересчитать»), чтобы у всех было одно и то же время
         try:
-            active = await routing.plan_day(s, day)
-            plan = routing.last_plan(day)
+            plan, active = await routing.get_plan(s, day, force=force_route)
         except Exception:
             log.exception("route planning failed")
             s.rollback()
@@ -251,8 +251,11 @@ async def route_cb(c: CallbackQuery):
     if offset < 0:
         return await c.answer("Этот день уже прошёл")
     await c.answer("Пересчитываю маршрут…")
-    await c.message.edit_reply_markup(reply_markup=None)
-    await send_day(c.bot, c.message.chat.id, offset)
+    try:
+        await c.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # старое сообщение уже нельзя редактировать — не страшно
+        pass
+    await send_day(c.bot, c.message.chat.id, offset, force_route=True)
 
 
 @router.message(F.text == BTN_TODAY)
@@ -322,8 +325,7 @@ async def order_cb(c: CallbackQuery):
             sv.set_status(o, "done", action)
             note = {"cash": "Доставлено, наличка", "transfer": "Доставлено, перевод", "debt": "Записал в долг"}[action]
         elif action == "move":
-            o.date = max(o.date, sv.today()) + timedelta(days=1)
-            o.eta_notified = False
+            sv.move_order(o, max(o.date, sv.today()) + timedelta(days=1))
             note = "Перенёс на " + sv.fmt_date(o.date)
         elif action == "cancel":
             sv.set_status(o, "cancelled")
@@ -379,10 +381,12 @@ async def handle_parsed(m: Message, parsed: ai.Parsed, heard: str = ""):
 
 @router.callback_query(F.data.startswith("p:"))
 async def pending_cb(c: CallbackQuery):
+    user = allowed(c.from_user.id)
+    if not user:
+        return await c.answer()
     _, key, action = c.data.split(":")
     item = PENDING.pop(key, None)
-    user = allowed(c.from_user.id)
-    if not item or not user:
+    if not item:
         await c.message.edit_reply_markup(reply_markup=None)
         return await c.answer("Устарело, отправь ещё раз")
     if action != "ok":

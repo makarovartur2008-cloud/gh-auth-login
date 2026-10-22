@@ -113,6 +113,18 @@ def test_eta_window_snaps_to_quarters(monkeypatch):
     assert routing.eta_window(at(10, 7), 90) == ("09:15", "10:45")
 
 
+def test_eta_window_never_before_departure(monkeypatch):
+    monkeypatch.setattr(settings, "eta_window_min", 60)
+    # выезд 10:00, прибытие 10:13 — было бы 09:45–10:45
+    assert routing.eta_window(at(10, 13), not_before=at(10, 0)) == ("10:00", "11:00")
+    # выезд «сейчас» 12:34: ближайшая четверть 12:45 не позже прибытия 12:50
+    assert routing.eta_window(at(12, 50), not_before=at(12, 34)) == ("12:45", "13:45")
+    # прибытие 12:40 раньше 12:45 — окно с самого выезда
+    assert routing.eta_window(at(12, 40), not_before=at(12, 34)) == ("12:34", "13:34")
+    # далёкие точки не трогаем
+    assert routing.eta_window(at(14, 20), not_before=at(10, 0)) == ("13:45", "14:45")
+
+
 def test_departure_time(monkeypatch):
     monkeypatch.setattr(settings, "route_start", "10:00")
     day = date(2026, 10, 23)
@@ -161,15 +173,16 @@ def test_plan_day_sets_fields_and_commits(net):
         got = {o.id: o for o in s.scalars(sv.order_query().where(Order.date == day))}
         assert [got[i].route_pos for i in (o1.id, o2.id, o3.id, lost.id)] == [1, 2, 3, 4]
         # выезд 10:00; 13 мин дороги (10 × 1.3) до каждой точки + 10 мин на точке
-        # прибытие 10:13, 10:36, 10:59 → окна от «прибытие − 30 мин» по четвертям часа
-        assert (got[o1.id].eta_from, got[o1.id].eta_to) == ("09:45", "10:45")
+        # прибытие 10:13, 10:36, 10:59 → окна от «прибытие − 30 мин» по четвертям часа,
+        # но не раньше выезда (у первой точки было бы 09:45)
+        assert (got[o1.id].eta_from, got[o1.id].eta_to) == ("10:00", "11:00")
         assert (got[o2.id].eta_from, got[o2.id].eta_to) == ("10:00", "11:00")
         assert (got[o3.id].eta_from, got[o3.id].eta_to) == ("10:30", "11:30")
         # ненайденный адрес — в конце и без времени
         assert got[lost.id].eta_from == "" and got[lost.id].client.lat is None
         assert got[done.id].route_pos is None
         assert got[o1.id].client.geo_address == "Город, Первая 1"
-        assert "🕑 09:45–10:45" in sv.order_text(got[o1.id])
+        assert "🕑 10:00–11:00" in sv.order_text(got[o1.id])
         assert "🕑" not in sv.order_text(got[lost.id])
 
     plan = routing.last_plan(day)
@@ -189,7 +202,7 @@ def test_plan_without_depot_starts_from_a_stop(net, monkeypatch):
         route = asyncio.run(routing.plan_day(s, day))
         names = [o.client.name for o in route]
         assert names in (["Единица", "Двойка", "Тройка"], ["Тройка", "Двойка", "Единица"])
-        assert route[0].eta_from == "09:30"  # первая точка — сразу в 10:00
+        assert (route[0].eta_from, route[0].eta_to) == ("10:00", "11:00")  # первая точка — сразу в 10:00
     assert routing.last_plan(day).total_km == 2.0
 
 
@@ -276,7 +289,7 @@ def test_route_api(client, net):
     assert data["departure"] == "10:00" and data["total_km"] == 2.0 and data["yandex_url"].startswith("https://yandex.ru")
     assert [st["order_id"] for st in data["stops"]] == [o1.id, o2.id, lost.id]
     first = data["stops"][0]
-    assert first["pos"] == 1 and first["eta_from"] == "09:45" and first["geocoded"] is True
+    assert first["pos"] == 1 and first["eta_from"] == "10:00" and first["geocoded"] is True
     assert first["name"] == "Единица" and first["lat"] == 56.0
     assert data["stops"][2]["geocoded"] is False and data["stops"][2]["eta_from"] == ""
 
@@ -291,3 +304,69 @@ def test_route_api(client, net):
     # пустой день
     empty = client.get(f"/api/route?day={(day + timedelta(days=5)).isoformat()}").json()
     assert empty["stops"] == [] and empty["yandex_url"] == ""
+
+
+def test_send_day_reuses_plan_and_matches_evening_eta(net, monkeypatch):
+    """Рассылка всем сотрудникам и вечернее сообщение клиентам — один расчёт, одно и то же время."""
+    from app import bot, notify
+
+    class FakeBot:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, chat_id, text, reply_markup=None, **kw):
+            self.sent.append((chat_id, text))
+
+    sent_to_clients = []
+
+    async def fake_tg(chat_id, text):
+        sent_to_clients.append(text)
+    monkeypatch.setattr(notify, "send_tg", fake_tg)
+
+    day = sv.today() + timedelta(days=1)
+    with SessionLocal() as s:
+        s.add_all([User(tg_id=1, name="Артур", role="owner"), User(tg_id=2, name="Друг", role="member")])
+        o1 = add_order(s, "Единица", "Первая 1", day)
+        o1.client.tg_chat_id = 555
+        add_order(s, "Двойка", "Вторая 2", day)
+        s.commit()
+    fb = FakeBot()
+    asyncio.run(bot.broadcast_day(fb, 1))
+    assert net.matrix_calls == 1  # второму сотруднику — тот же расчёт
+    a = [t for c, t in fb.sent if c == 1]
+    b = [t for c, t in fb.sent if c == 2]
+    assert a == b and "🕑 10:00–11:00" in a[1]
+
+    # кэш «устарел» по времени, но заказы те же — вечерняя рассылка не пересчитывает
+    assert asyncio.run(notify.evening_eta(SessionLocal)) == 1
+    assert net.matrix_calls == 1
+    assert "примерно 10:00–11:00" in sent_to_clients[0]
+
+    # кнопка «Пересчитать» — считает заново
+    asyncio.run(bot.send_day(fb, 1, 1, force_route=True))
+    assert net.matrix_calls == 2
+    # изменился состав заказов — пересчёт сам
+    with SessionLocal() as s:
+        add_order(s, "Тройка", "Третья 3", day)
+    asyncio.run(bot.send_day(fb, 1, 1))
+    assert net.matrix_calls == 3
+
+
+def test_moving_order_resets_eta(client, net):
+    day = sv.today() + timedelta(days=1)
+    with SessionLocal() as s:
+        o = add_order(s, "Единица", "Первая 1", day)
+        o.eta_from, o.eta_to, o.route_pos, o.eta_notified = "10:00", "11:00", 1, True
+        s.commit()
+    r = client.patch(f"/api/orders/{o.id}", json={"date": (day + timedelta(days=1)).isoformat()})
+    assert r.status_code == 200, r.text
+    with SessionLocal() as s:
+        got = s.get(Order, o.id)
+        assert got.date == day + timedelta(days=1)
+        assert not got.eta_notified and got.eta_from == "" and got.route_pos is None
+        # та же дата — ничего не сбрасываем
+        got.eta_from, got.eta_notified = "12:00", True
+        s.commit()
+    client.patch(f"/api/orders/{o.id}", json={"date": (day + timedelta(days=1)).isoformat(), "notes": "x"})
+    with SessionLocal() as s:
+        assert s.get(Order, o.id).eta_notified and s.get(Order, o.id).eta_from == "12:00"

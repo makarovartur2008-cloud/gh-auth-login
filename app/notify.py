@@ -183,7 +183,9 @@ async def evening_eta(Session_) -> int:
     count = 0
     with Session_() as s:
         try:
-            await routing.plan_day(s, tomorrow)
+            sv.generate_recurring(s)
+            # тот же расчёт, что ушёл сотрудникам в 20:00 (пересчёт — только если заказы поменялись)
+            await routing.get_plan(s, tomorrow)
         except Exception:
             log.exception("Маршрут на завтра не посчитан — шлём без времени")
         orders = s.scalars(sv.order_query().where(Order.date == tomorrow, Order.status == "new",

@@ -143,13 +143,13 @@ def test_sms_error_is_not_success(s, monkeypatch, http):
 
 
 def test_evening_job_sends_once(s, monkeypatch, tg_sent):
-    async def fake_plan(sess, day):
+    async def fake_plan(sess, day, force=False):
         orders = [o for o in sv.orders_on(sess, day) if o.status == "new"]
         for o in orders:
             o.eta_from, o.eta_to = "12:00", "13:00"
         sess.commit()
-        return orders
-    monkeypatch.setattr(routing, "plan_day", fake_plan)
+        return routing.Plan(day=day), orders
+    monkeypatch.setattr(routing, "get_plan", fake_plan)
     o = make_order(s, tg_chat_id=555)
     make_order(s, phone="89005556677")  # не подписан — ему писать некуда
     make_order(s, phone="89005556678", days=2, tg_chat_id=556)  # не завтра
@@ -255,3 +255,91 @@ def test_public_order_returns_links_and_sends_sms(monkeypatch, http):
     assert data["max_link"] == ""  # MAX не настроен
     sms = [q for q in http.calls if q.url.host == "sms.ru"]
     assert len(sms) == 1 and "принят" in parse_qs(urlparse(str(sms[0].url)).query)["msg"][0]
+
+
+def _callback(user_id, data):
+    return {"update_id": 2, "callback_query": {
+        "id": "1", "chat_instance": "1", "data": data,
+        "from": {"id": user_id, "is_bot": False, "first_name": "Нина"},
+        "message": {"message_id": 5, "date": 0, "chat": {"id": user_id, "type": "private"}, "text": "x"}}}
+
+
+def test_client_cannot_use_staff_buttons_or_lists(s, monkeypatch, phone):
+    from aiogram.methods import AnswerCallbackQuery
+
+    from app import bot as tgbot
+
+    calls = []
+
+    async def fake_call(self, method, request_timeout=None):
+        calls.append(method)
+    monkeypatch.setattr(Bot, "__call__", fake_call)
+    bot = Bot("42:TEST", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    planned = []
+
+    async def no_plan(*a, **kw):
+        planned.append(a)
+        raise AssertionError("клиент не должен запускать расчёт маршрута")
+    monkeypatch.setattr(routing, "get_plan", no_plan)
+    monkeypatch.setattr(routing, "plan_day", no_plan)
+
+    s.add(User(tg_id=1, name="Артур", role="owner"))
+    o = make_order(s, tg_chat_id=555)
+    s.commit()
+    tgbot.PENDING["k1"] = (1, None)
+
+    def feed(upd):
+        asyncio.run(dispatcher().feed_update(bot, Update.model_validate(upd, context={"bot": bot})))
+
+    day = (sv.today() + timedelta(days=1)).isoformat()
+    for data in (f"o:{o.id}:cash", f"o:{o.id}:move", f"o:{o.id}:cancel", f"n:{o.id}:status", f"n:{o.id}:go",
+                 "r:month", "p:k1:ok", "p:k1:no", f"route:{day}"):
+        for uid in (555, 777):  # подписанный клиент и просто посторонний
+            calls.clear()
+            feed(_callback(uid, data))
+            assert all(isinstance(m, AnswerCallbackQuery) for m in calls), (data, calls)
+            assert all(not m.text for m in calls), (data, calls)
+    assert "k1" in tgbot.PENDING and not planned
+    with SessionLocal() as s2:
+        got = s2.get(Order, o.id)
+        assert got.status == "new" and got.date == o.date
+
+    # кнопки меню сотрудника: клиенту — автоответ, постороннему — тишина, списков никому
+    for text in (tgbot.BTN_TODAY, tgbot.BTN_TOMORROW, tgbot.BTN_REPORT, tgbot.BTN_DEBTS, "/help", "/users"):
+        calls.clear()
+        feed({"update_id": 3, "message": {"message_id": 1, "date": 0, "chat": {"id": 555, "type": "private"},
+                                           "from": {"id": 555, "is_bot": False, "first_name": "Нина"}, "text": text}})
+        assert len(calls) == 1 and calls[0].text == notify.auto_reply_text()
+        calls.clear()
+        feed({"update_id": 3, "message": {"message_id": 1, "date": 0, "chat": {"id": 777, "type": "private"},
+                                           "from": {"id": 777, "is_bot": False, "first_name": "Чужой"}, "text": text}})
+        assert calls == []
+    tgbot.PENDING.pop("k1", None)
+
+
+def test_subscribed_client_can_still_accept_invite(s, tg, phone):
+    from app.db import Invite
+    s.add(User(tg_id=1, name="Артур", role="owner"))
+    s.add(Invite(token="abc"))
+    o = make_order(s)
+    s.commit()
+    tg(555, f"/start c_{o.token}")
+    tg(555, "/start inv_abc")
+    with SessionLocal() as s2:
+        assert s2.query(User).filter_by(tg_id=555).one().role == "member"
+
+
+def test_bot_move_resets_eta(s, monkeypatch):
+    async def fake_call(self, method, request_timeout=None):
+        pass
+    monkeypatch.setattr(Bot, "__call__", fake_call)
+    bot = Bot("42:TEST", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    s.add(User(tg_id=1, name="Артур", role="owner"))
+    o = make_order(s)
+    o.eta_from, o.eta_to, o.route_pos, o.eta_notified = "10:00", "11:00", 1, True
+    s.commit()
+    asyncio.run(dispatcher().feed_update(bot, Update.model_validate(_callback(1, f"o:{o.id}:move"),
+                                                                    context={"bot": bot})))
+    with SessionLocal() as s2:
+        got = s2.get(Order, o.id)
+        assert got.date == o.date + timedelta(days=1) and not got.eta_notified and got.eta_from == ""

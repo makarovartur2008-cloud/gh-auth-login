@@ -236,16 +236,24 @@ def departure_time(day: date, now: datetime | None = None) -> datetime:
     return dep
 
 
-def eta_window(arrival: datetime, width_min: int | None = None) -> tuple[str, str]:
+def eta_window(arrival: datetime, width_min: int | None = None,
+               not_before: datetime | None = None) -> tuple[str, str]:
     """Окно для клиента. Правило: начало = прибытие − половина ширины, округлённое
     до ближайшей четверти часа (ровно посередине — вверх); конец = начало + ширина.
-    Пример: прибытие 14:20, ширина 60 → 13:50 → 13:45–14:45."""
+    Пример: прибытие 14:20, ширина 60 → 13:50 → 13:45–14:45.
+    not_before — время выезда: окно не начинается раньше него (ширина та же).
+    Начало — ближайшая четверть часа после выезда, если она не позже прибытия, иначе само время выезда."""
     width = settings.eta_window_min if width_min is None else width_min
     start = arrival - timedelta(minutes=width / 2)
     mins = start.hour * 60 + start.minute + start.second / 60
     snapped = math.floor(mins / SNAP_MIN + 0.5) * SNAP_MIN
     base = start.replace(hour=0, minute=0, second=0, microsecond=0)
     frm = base + timedelta(minutes=snapped)
+    if not_before is not None and frm < not_before:
+        nb = not_before.replace(second=0, microsecond=0)
+        q = SNAP_MIN * math.ceil((nb.hour * 60 + nb.minute) / SNAP_MIN)
+        up = nb.replace(hour=0, minute=0) + timedelta(minutes=q)
+        frm = up if up <= arrival else nb
     to = frm + timedelta(minutes=width)
     return frm.strftime("%H:%M"), to.strftime("%H:%M")
 
@@ -323,7 +331,7 @@ async def plan_day(s: Session, day: date) -> list[Order]:
             travel += dur[prev][node]
             meters += dist[prev][node]
         o = found[node - shift][0]
-        o.eta_from, o.eta_to = eta_window(t)
+        o.eta_from, o.eta_to = eta_window(t, not_before=dep)
         route.append(o)
         t += timedelta(minutes=settings.service_min)
         prev = node

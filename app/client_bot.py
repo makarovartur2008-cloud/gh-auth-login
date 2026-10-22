@@ -28,8 +28,8 @@ def is_client_start(m: Message) -> bool:
 
 def is_subscribed_client(m: Message) -> bool:
     """Не сотрудник, но уже подписан на заказ — значит, это клиент."""
-    if not m.from_user:
-        return False
+    if not m.from_user or _start_payload(m).startswith("inv_"):
+        return False  # приглашение сотрудника — обрабатывает app/bot.py
     with SessionLocal() as s:
         if sv.get_user(s, m.from_user.id):
             return False
