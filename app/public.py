@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app import notify
 from app import services as sv
 from app.api import get_db
 from app.config import settings
@@ -135,7 +136,10 @@ async def create_public_order(body: PublicOrder, request: Request, s: Session = 
     from app.bot import notify_order
     header = "🔔 <b>Новая заявка с сайта</b>" + ("" if created else " (клиент уже есть в базе)")
     await notify_order(order.id, header)
-    return {"ok": True, "id": order.id, "total": order.total}
+    # обычно дойдёт только SMS: в Telegram/MAX клиент подпишется через секунду, и статус придёт тогда
+    await notify.notify_client(s, order, "accepted")
+    return {"ok": True, "id": order.id, "total": order.total, "token": order.token,
+            "tg_link": notify.tg_link(order), "max_link": notify.max_link(order)}
 
 
 # ---------- QR и листовка ----------

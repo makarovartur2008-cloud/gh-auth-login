@@ -17,7 +17,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
-from app import ai
+from app import ai, client_bot, notify
 from app import services as sv
 from app.config import settings
 from app.db import Invite, Order, SessionLocal, User
@@ -66,7 +66,13 @@ def order_kb(o: Order) -> InlineKeyboardMarkup | None:
             [InlineKeyboardButton(text="📝 В долг", callback_data=f"o:{o.id}:debt"),
              InlineKeyboardButton(text="➡️ На завтра", callback_data=f"o:{o.id}:move"),
              InlineKeyboardButton(text="❌ Отмена", callback_data=f"o:{o.id}:cancel")],
+            # сообщения клиенту (app/notify.py)
+            [InlineKeyboardButton(text="📣 Сообщить клиенту", callback_data=f"n:{o.id}:status"),
+             InlineKeyboardButton(text="🚚 Еду", callback_data=f"n:{o.id}:go")],
         ]
+        wa = notify.wa_link(o)
+        if wa:
+            rows.append([InlineKeyboardButton(text="💬 WhatsApp", url=wa)])
     elif o.status == "done" and o.payment == "debt":
         rows = [[InlineKeyboardButton(text="💵 Оплатил наличкой", callback_data=f"o:{o.id}:cash"),
                  InlineKeyboardButton(text="💳 Перевод", callback_data=f"o:{o.id}:transfer")]]
@@ -256,6 +262,7 @@ async def order_cb(c: CallbackQuery):
             note = {"cash": "Доставлено, наличка", "transfer": "Доставлено, перевод", "debt": "Записал в долг"}[action]
         elif action == "move":
             o.date = max(o.date, sv.today()) + timedelta(days=1)
+            o.eta_notified = False
             note = "Перенёс на " + sv.fmt_date(o.date)
         elif action == "cancel":
             sv.set_status(o, "cancelled")
@@ -268,6 +275,27 @@ async def order_cb(c: CallbackQuery):
         s.commit()
         await c.message.edit_text(sv.order_text(o, with_date=action == "move"), reply_markup=order_kb(o))
     await c.answer(note)
+
+
+@router.callback_query(F.data.startswith("n:"))
+async def notify_cb(c: CallbackQuery):
+    """Кнопки «📣 Сообщить клиенту» и «🚚 Еду» на карточке заказа."""
+    if not allowed(c.from_user.id):
+        return await c.answer()
+    _, oid, action = c.data.split(":")
+    with SessionLocal() as s:
+        o = s.scalar(sv.order_query().where(Order.id == int(oid)))
+        if not o:
+            return await c.answer("Заказ не найден")
+        kind = "on_the_way" if action == "go" else notify.status_kind(o)
+        sent = await notify.notify_client(s, o, kind)
+        if sent and kind == "eta":
+            o.eta_notified = True
+            s.commit()
+    if sent:
+        await c.answer("Отправлено: " + notify.channels_label(sent))
+    else:
+        await c.answer("Клиент не подписан — нажми WhatsApp", show_alert=True)
 
 
 # ---------- голос / текст / скриншоты ----------
@@ -395,5 +423,6 @@ def make_bot() -> tuple[Bot, Dispatcher]:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     BOT = bot
     dp = Dispatcher()
+    dp.include_router(client_bot.router)  # клиенты — раньше сотрудников
     dp.include_router(router)
     return bot, dp

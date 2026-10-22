@@ -100,6 +100,8 @@ class Order(Base):
     eta_to: Mapped[str] = mapped_column(String(5), default="")
     # секрет для ссылки «следить за заказом» (подписка клиента на сообщения)
     token: Mapped[str] = mapped_column(String(24), default=lambda: secrets.token_urlsafe(12))
+    # клиенту уже отправили «завтра привезём, примерно …» (сбрасывается при переносе)
+    eta_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     client: Mapped[Client] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(
@@ -188,6 +190,7 @@ NEW_COLUMNS = [
     ("orders", "eta_from", "VARCHAR(5) DEFAULT '' NOT NULL"),
     ("orders", "eta_to", "VARCHAR(5) DEFAULT '' NOT NULL"),
     ("orders", "token", "VARCHAR(24) DEFAULT '' NOT NULL"),
+    ("orders", "eta_notified", "BOOLEAN DEFAULT 0 NOT NULL"),
     ("clients", "lat", "FLOAT"),
     ("clients", "lon", "FLOAT"),
     ("clients", "geo_address", "VARCHAR(250) DEFAULT '' NOT NULL"),
