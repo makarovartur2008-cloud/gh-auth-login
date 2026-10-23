@@ -226,9 +226,10 @@ def parse_hhmm(t: str) -> tuple[int, int]:
     return int(hh), int(mm)
 
 
-def departure_time(day: date, now: datetime | None = None) -> datetime:
-    """Выезд в route_start; если считаем на сегодня и уже позже — от текущего времени."""
-    hh, mm = parse_hhmm(settings.route_start)
+def departure_time(day: date, now: datetime | None = None, start: str | None = None) -> datetime:
+    """Выезд в route_start (или start — для вечернего рейса); если считаем на сегодня и уже позже —
+    от текущего времени."""
+    hh, mm = parse_hhmm(start or settings.route_start)
     dep = datetime(day.year, day.month, day.day, hh, mm, tzinfo=settings.zone)
     now = now or datetime.now(settings.zone)
     if day == now.date() and now > dep:
@@ -272,6 +273,8 @@ class Plan:
     order_ids: list[int] = field(default_factory=list)  # все открытые заказы в порядке маршрута
     osrm: bool = False
     key: tuple = ()
+    stops: int = 0  # сколько заказов в этом рейсе
+    evening: "Plan | None" = None  # вечерний рейс (заказы со slot="evening"), если есть
 
     @property
     def yandex_url(self) -> str:
@@ -285,8 +288,8 @@ _plans: dict[date, Plan] = {}
 
 def plan_key(orders: list[Order]) -> tuple:
     """Что должно совпасть, чтобы старый расчёт ещё годился."""
-    return (settings.depot_address, settings.city, settings.route_start,
-            tuple((o.id, o.client.address) for o in sorted(orders, key=lambda o: o.id)))
+    return (settings.depot_address, settings.city, settings.route_start, settings.evening_start,
+            tuple((o.id, o.client.address, o.slot) for o in sorted(orders, key=lambda o: o.id)))
 
 
 def last_plan(day: date) -> Plan | None:
@@ -298,8 +301,27 @@ def open_orders(s: Session, day: date) -> list[Order]:
 
 
 async def plan_day(s: Session, day: date) -> list[Order]:
+    """Дневной рейс, потом вечерний: у каждого свой выезд и порядок, номера точек — сквозные."""
     orders = open_orders(s, day)
     plan = Plan(day=day, key=plan_key(orders))
+    day_orders = [o for o in orders if o.slot != "evening"]
+    evening_orders = [o for o in orders if o.slot == "evening"]
+    route = await _plan_trip(plan, day_orders, departure_time(day))
+    if evening_orders:
+        plan.evening = Plan(day=day)
+        route += await _plan_trip(plan.evening, evening_orders,
+                                  departure_time(day, start=settings.evening_start))
+    for pos, o in enumerate(route, 1):
+        o.route_pos = pos
+    plan.order_ids = [o.id for o in route]
+    s.commit()
+    _plans[day] = plan
+    return route
+
+
+async def _plan_trip(plan: Plan, orders: list[Order], dep: datetime) -> list[Order]:
+    """Один рейс: порядок объезда, окна прибытия, км и время — в plan."""
+    plan.stops = len(orders)
     found: list[tuple[Order, Point]] = []
     lost: list[Order] = []
     seen: dict[int, Point | None] = {}
@@ -318,7 +340,6 @@ async def plan_day(s: Session, day: date) -> list[Order]:
     dur, dist, plan.osrm = await travel_matrix(points)
     nodes = order_stops(dur, 0 if depot else None)[shift:]
 
-    dep = departure_time(day)
     plan.departure = dep.strftime("%H:%M")
     plan.depot = depot
     # прибытие на точку = выезд + дорога + service_min на каждой предыдущей точке
@@ -339,15 +360,11 @@ async def plan_day(s: Session, day: date) -> list[Order]:
     for o in lost:
         o.eta_from = o.eta_to = ""
         route.append(o)
-    for pos, o in enumerate(route, 1):
-        o.route_pos = pos
 
     plan.total_km = round(meters / 1000, 1)
     plan.total_min = round(travel / 60 + settings.service_min * len(found))
     plan.waypoints = ([depot] if depot else []) + [points[n] for n in nodes]
     plan.order_ids = [o.id for o in route]
-    s.commit()
-    _plans[day] = plan
     return route
 
 

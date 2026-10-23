@@ -142,7 +142,9 @@ function orderCard(o, { overdue = false, stop = null } = {}) {
         stop && stop.eta_from ? h("span", { class: "badge eta" }, `🕑 ${stop.eta_from}–${stop.eta_to}`) : null,
         stop ? h("span", { class: "hint" }, `точка ${stop.pos}`) : null)),
     h("div", { class: "items", onclick: () => orderForm(o) },
-      o.items.map((i) => h("div", {}, `${i.emoji || "•"} ${i.name} — ${qty(i.qty)} ${i.unit} × ${qty(i.price)} = ${money(i.sum)}`)),
+      o.slot === "evening" ? h("div", { class: "hint" }, "🌙 вечерний рейс") : null,
+      o.items.map((i) => h("div", {}, i.gift ? `🎁 ${i.name} — ${qty(i.qty)} ${i.unit} в подарок`
+        : `${i.emoji || "•"} ${i.name} — ${qty(i.qty)} ${i.unit} × ${qty(i.price)} = ${money(i.sum)}`)),
       o.notes && o.notes !== "🔁 постоянный" ? h("div", { class: "hint" }, "📝 ", o.notes) : null,
       c.notes ? h("div", { class: "hint" }, "ℹ️ ", c.notes) : null),
     h("div", { class: "row between" }, phoneLink(c) || h("span"), h("span", { class: "sum" }, money(o.total))),
@@ -235,11 +237,14 @@ function routeCard(day, r) {
   if (r.total_min) facts.push(`≈ ${fmtMin(r.total_min)}`);
   return h("div", { class: "card route" },
     h("div", { class: "row between" }, h("div", { class: "name" }, "🧭 Маршрут"), h("span", { class: "hint" }, `${r.stops.length} точ.`)),
-    h("div", {}, facts.join(" · ")),
+    r.day_stops !== 0 ? h("div", {}, facts.join(" · ")) : null,
+    r.evening ? h("div", {}, `🌙 вечерний рейс: выезд ${r.evening.departure} · ${r.evening.stops} точ.`
+      + (r.evening.total_km ? ` · ≈ ${r.evening.total_km} км` : "")) : null,
     lost ? h("div", { class: "hint warn" }, `🗺❓ не найдено на карте: ${lost} — проверь адрес, эти точки в конце без времени`) : null,
     h("div", { class: "hint" }, "Время примерное, без учёта пробок"),
     h("div", { class: "actions" },
-      r.yandex_url ? h("button", { class: "primary small", onclick: () => openLink(r.yandex_url) }, "Открыть в Яндекс Картах") : null,
+      r.yandex_url && r.day_stops !== 0 ? h("button", { class: "primary small", onclick: () => openLink(r.yandex_url) }, "Открыть в Яндекс Картах") : null,
+      r.evening?.yandex_url ? h("button", { class: "small", onclick: () => openLink(r.evening.yandex_url) }, "🌙 Вечерний маршрут") : null,
       h("button", { class: "small", onclick: (e) => { haptic(); e.target.disabled = true; e.target.textContent = "Считаю…"; loadRoute(day, true); } }, "🔄 Пересчитать")));
 }
 
@@ -252,6 +257,8 @@ async function orderForm(order, preset = {}) {
   const items = order ? order.items.map((i) => ({ ...i })) : [{ product_id: products[0]?.id, qty: products[0]?.min_qty || 1, price: products[0]?.price }];
 
   const dateIn = h("input", { type: "date", value: order?.date || preset.date || state.today });
+  const slotIn = h("select", {}, h("option", { value: "" }, "☀️ Дневной рейс"), h("option", { value: "evening" }, "🌙 Вечерний рейс (18:00–21:00)"));
+  slotIn.value = order?.slot || "";
   const notesIn = h("textarea", { placeholder: "Заметка к заказу" }, order?.notes || "");
   const friendIn = h("input", { type: "checkbox" });
   friendIn.checked = order ? order.via_friend : state.me.role !== "owner";
@@ -325,7 +332,7 @@ async function orderForm(order, preset = {}) {
   drawItems();
 
   async function save() {
-    const body = { date: dateIn.value, notes: notesIn.value, via_friend: friendIn.checked,
+    const body = { date: dateIn.value, slot: slotIn.value, notes: notesIn.value, via_friend: friendIn.checked,
       items: items.filter((i) => i.qty > 0).map((i) => ({ product_id: i.product_id, qty: i.qty, price: i.price })) };
     if (isNew) {
       if (client) body.client_id = client.id;
@@ -351,6 +358,7 @@ async function orderForm(order, preset = {}) {
     h("h2", { style: "margin-top:0" }, isNew ? "Новый заказ" : `Заказ №${order.id}`),
     h("label", {}, "Клиент"), clientBox,
     h("label", {}, "Дата доставки"), dateIn,
+    h("label", {}, "Рейс"), slotIn,
     h("label", {}, "Товары"), itemsBox,
     notesIn,
     h("label", { class: "check" }, friendIn, ` Заявка через друга (−${state.me.friend_fee} ₽)`),

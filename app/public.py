@@ -151,6 +151,89 @@ async def notify_new_web_order(order_id: int, header: str):
             await notify.notify_client(s, order, "accepted")
 
 
+# ---------- перенос доставки (/r/<token>) ----------
+
+
+@router.get("/r/{token}")
+def reschedule_page(token: str):
+    return FileResponse(STATIC / "reschedule.html", headers={"Cache-Control": "no-cache"})
+
+
+def _resched_order(s: Session, token: str) -> Order:
+    o = notify.find_by_token(s, token)
+    if not o:
+        raise HTTPException(404, "Ссылка устарела или с ошибкой")
+    return o
+
+
+@router.get("/api/public/resched/{token}")
+def reschedule_info(token: str, s: Session = Depends(get_db)):
+    from app import reschedule
+
+    o = _resched_order(s, token)
+    r = reschedule.pending(s, o)
+    phone = sv.fmt_phone(settings.contact_phone) if settings.contact_phone else ""
+    base = dict(order_id=o.id, status=o.status, phone=phone, total=o.total,
+                current=sv.day_slot_label(o.date, o.slot), eta=sv.eta_text(o),
+                bonus=sv.bonus_label(o.bonus),
+                items=[f"{i.product.name} — {sv.fmt_qty(i.qty)} {i.product.unit}"
+                       + (" (подарок)" if i.price == 0 and o.bonus else "") for i in o.items])
+    if o.status != "new":
+        return dict(base, mode="closed", options=[], bonus_choices=[])
+    if r:
+        return dict(base, mode="offer", apology=r.old_eta, options=r.options,
+                    bonus_choices=[dict(key=k, label=sv.bonus_label(k), emoji=sv.BONUS_EMOJI[k])
+                                   for k in r.bonus_choices])
+    return dict(base, mode="self", options=reschedule.self_options(o), bonus_choices=[])
+
+
+class ReschedChoice(BaseModel):
+    date: str
+    slot: str = ""
+    bonus: str = ""
+
+
+@router.post("/api/public/resched/{token}")
+async def reschedule_choose(token: str, body: ReschedChoice, background: BackgroundTasks,
+                            s: Session = Depends(get_db)):
+    from app import reschedule
+
+    o = _resched_order(s, token)
+    if o.status != "new":
+        raise HTTPException(400, "Заказ уже доставлен или отменён")
+    r = reschedule.pending(s, o)
+    options = r.options if r else reschedule.self_options(o)
+    idx = next((i for i, x in enumerate(options) if x["date"] == body.date and x["slot"] == body.slot), None)
+    if idx is None:
+        raise HTTPException(400, "Этот вариант уже недоступен — обновите страницу")
+    old = sv.day_slot_label(o.date, o.slot)
+    if r:
+        label = reschedule.answer(s, r, idx, body.bonus)
+        header = f"✅ <b>{sv.esc(o.client.name)}</b> выбрал(а) время после переноса: {sv.esc(label)}"
+    else:
+        reschedule.client_move(s, o, date.fromisoformat(body.date), body.slot)
+        label = options[idx]["label"]
+        header = (f"🔄 <b>Клиент сам перенёс доставку</b>\n{sv.esc(o.client.name)}: "
+                  f"было {sv.esc(old.lower())} → стало <b>{sv.esc(label.lower())}</b>")
+    if o.bonus:
+        header += f"\n🎁 Подарок: {sv.bonus_label(o.bonus)}"
+    s.commit()
+    text = reschedule.chosen_text(o, label)
+    background.add_task(_after_choice, o.id, header, text)
+    return {"ok": True, "label": label, "text": text}
+
+
+async def _after_choice(order_id: int, header: str, client_text: str):
+    from app import reschedule
+    from app.bot import notify_order
+
+    await notify_order(order_id, header)
+    with SessionLocal() as s:
+        o = s.scalar(sv.order_query().where(Order.id == order_id))
+        if o:
+            await reschedule.tell_client(o, client_text)
+
+
 # ---------- QR и листовка ----------
 
 

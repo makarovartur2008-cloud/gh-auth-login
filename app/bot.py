@@ -44,6 +44,7 @@ HELP = f"""<b>Как пользоваться</b>
 
 {BTN_TODAY} / {BTN_TOMORROW} — список доставок с кнопками «Доставлено».
 {BTN_REPORT} — прибыль за день/неделю/месяц.
+⏰ Не успеваешь? В списке доставок — «Перенести доставки»: бот извинится, подарит 5 кг овощей и даст клиенту выбрать время.
 📱 Приложение — клиенты, заказы на любой день, цены, расходы.
 
 Мешок/сетка картошки = {settings.sack_kg} кг. Каждое утро в {settings.morning_hour}:00 приходит список на сегодня,
@@ -69,6 +70,7 @@ def order_kb(o: Order) -> InlineKeyboardMarkup | None:
             # сообщения клиенту (app/notify.py)
             [InlineKeyboardButton(text="📣 Сообщить клиенту", callback_data=f"n:{o.id}:status"),
              InlineKeyboardButton(text="🚚 Еду", callback_data=f"n:{o.id}:go")],
+            [InlineKeyboardButton(text="⏰ Перенести с извинением", callback_data=f"rs:one:{o.id}")],
         ]
         wa = notify.wa_link(o)
         if wa:
@@ -181,6 +183,14 @@ def route_head(plan, stops: int) -> str:
         text += " (по прямой)"
     if plan.yandex_url:
         text += f'\n<a href="{sv.esc(plan.yandex_url)}">🗺 Открыть маршрут в Яндекс Картах</a>'
+    ev = plan.evening
+    if ev and ev.stops:
+        if not plan.stops:  # днём никого — шапка только про вечер
+            text = ""
+        text += (("\n" if text else "") + f"🌙 <b>Вечерний рейс:</b> выезд {ev.departure}, {ev.stops} точ."
+                 + (f", ≈ {ev.total_km:g} км" if ev.total_km else ""))
+        if ev.yandex_url:
+            text += f'\n<a href="{sv.esc(ev.yandex_url)}">🗺 Вечерний маршрут в Яндекс Картах</a>'
     text += "\n<i>Время примерное, без учёта пробок.</i>"
     return text
 
@@ -220,8 +230,9 @@ async def send_day(bot: Bot, chat_id: int, offset: int, force_route: bool = Fals
                     f"• {sv.esc(n)}: {sv.fmt_qty(q)}" for n, q in load.items())
             if active and plan:
                 head += "\n\n" + route_head(plan, len(active))
-                kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔄 Пересчитать маршрут", callback_data=f"route:{day.isoformat()}")]])
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Пересчитать маршрут", callback_data=f"route:{day.isoformat()}")],
+                    [InlineKeyboardButton(text="⏰ Перенести доставки", callback_data=f"rs:day:{day.isoformat()}")]])
         await bot.send_message(chat_id, head, reply_markup=kb,
                                link_preview_options=LinkPreviewOptions(is_disabled=True))
         for o in overdue:
@@ -451,6 +462,187 @@ async def text(m: Message):
 
 
 # ---------- рассылки по расписанию ----------
+
+
+# ---------- перенос доставок (app/reschedule.py) ----------
+
+# мастер переноса: tg_id -> {"day", "ids", "sel", "opts", "keys", "bonus"}
+WIZ: dict[int, dict] = {}
+
+
+def _btn(text: str, data: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=data)
+
+
+def _wiz_screen(w: dict) -> tuple[str, InlineKeyboardMarkup]:
+    from app import reschedule as rs
+
+    step = w["step"]
+    head = f"⏰ <b>Перенос доставок — {sv.fmt_date(w['day'])}</b>\n"
+    rows = []
+    if step == "who":
+        text = head + "Кого переносим? Нажми, чтобы убрать/добавить."
+        for oid, label in w["ids"]:
+            rows.append([_btn(("✅ " if oid in w["sel"] else "⬜ ") + label, f"rs:t:{oid}")])
+        rows.append([_btn("Дальше ➡️", "rs:go")])
+    elif step == "opts":
+        text = head + "Какие варианты времени предложить клиентам? (первый — куда заказ встанет, пока клиент не ответил)"
+        for k in w["keys"]:
+            label = rs.PRESETS[k] + (f" ({sv.evening_window()})" if "evening" in k else "")
+            rows.append([_btn(("✅ " if k in w["opts"] else "⬜ ") + label, f"rs:o:{k}")])
+        rows.append([_btn("Дальше ➡️", "rs:go")])
+    elif step == "bonus":
+        text = head + "Подарок за неудобство:"
+        rows += [[_btn(label, f"rs:b:{mode}")] for mode, label in rs.BONUS_MODES.items()]
+    else:
+        with SessionLocal() as s:
+            o = s.scalar(sv.order_query().where(Order.id == min(w["sel"])))
+            sample = rs.preview(o, [k for k in w["keys"] if k in w["opts"]], w["bonus"]) if o else ""
+        text = (head + f"Сообщение уйдёт клиентам: <b>{len(w['sel'])}</b>. Подарок: {rs.BONUS_MODES[w['bonus']]}\n\n"
+                f"Пример:\n<i>{sv.esc(sample)}</i>")
+        rows.append([_btn("📤 Отправить", "rs:send")])
+    rows.append([_btn("❌ Отмена", "rs:x")])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _wiz_start(c: CallbackQuery, day, only: int | None = None):
+    from app import reschedule as rs
+    from app import routing
+
+    with SessionLocal() as s:
+        orders = sorted(routing.open_orders(s, day), key=lambda o: (o.route_pos or 999, o.id))
+        if only:
+            orders = [o for o in orders if o.id == only]
+        if not orders:
+            return await c.answer("Нет заказов, ожидающих доставки")
+        ids = [(o.id, f"{o.client.name} · " + (f"{o.eta_from}–{o.eta_to}" if o.eta_from else
+                                                 sv.SLOT_NAMES[o.slot])) for o in orders]
+        keys = [k for k in rs.PRESETS if any(k in rs.available_presets(o.date, o.slot) for o in orders)]
+    w = dict(day=day, ids=ids, sel={i for i, _ in ids}, keys=keys, opts=set(keys), bonus="choice",
+             step="opts" if only else "who")
+    WIZ[c.from_user.id] = w
+    text, kb = _wiz_screen(w)
+    await c.message.answer(text, reply_markup=kb)
+    await c.answer()
+
+
+@router.callback_query(F.data.startswith("rs:"))
+async def reschedule_cb(c: CallbackQuery):
+    from datetime import date
+
+    from app import reschedule as rs
+
+    user = allowed(c.from_user.id)
+    if not user:
+        return await c.answer()
+    parts = c.data.split(":")
+    action = parts[1]
+    if action == "day":
+        return await _wiz_start(c, date.fromisoformat(parts[2]))
+    if action == "one":
+        with SessionLocal() as s:
+            o = s.get(Order, int(parts[2]))
+            day = o.date if o else None
+        return await _wiz_start(c, day, only=int(parts[2])) if day else await c.answer("Заказ не найден")
+    if action == "pick":  # ответ за клиента из напоминания
+        with SessionLocal() as s:
+            r = s.get(rs.Reschedule, int(parts[2]))
+            if not r or r.status != "pending":
+                return await c.answer("Уже выбрано")
+            label = rs.answer(s, r, int(parts[3]))
+            s.commit()
+            o = s.scalar(sv.order_query().where(Order.id == r.order_id))
+            await rs.tell_client(o, rs.chosen_text(o, label))
+        await c.message.edit_text(c.message.html_text + f"\n\n✅ Записал: <b>{sv.esc(label)}</b>")
+        return await c.answer("Записал")
+
+    w = WIZ.get(c.from_user.id)
+    if not w:
+        await c.message.edit_reply_markup(reply_markup=None)
+        return await c.answer("Устарело, начни заново")
+    if action == "x":
+        WIZ.pop(c.from_user.id, None)
+        await c.message.edit_text("Перенос отменён.")
+        return await c.answer()
+    if action == "t":
+        w["sel"] ^= {int(parts[2])}
+    elif action == "o":
+        w["opts"] ^= {parts[2]}
+    elif action == "b":
+        w["bonus"], w["step"] = parts[2], "preview"
+    elif action == "go":
+        if w["step"] == "who":
+            if not w["sel"]:
+                return await c.answer("Отметь хотя бы одного клиента")
+            w["step"] = "opts"
+        elif w["step"] == "opts":
+            if not w["opts"]:
+                return await c.answer("Отметь хотя бы один вариант")
+            w["step"] = "bonus"
+    elif action == "send":
+        WIZ.pop(c.from_user.id, None)
+        await c.message.edit_text(c.message.html_text.split("\n\nПример:")[0] + "\n\n⏳ Отправляю…")
+        await c.answer()
+        return await _wiz_send(c, w, user)
+    text, kb = _wiz_screen(w)
+    await c.message.edit_text(text, reply_markup=kb)
+    await c.answer()
+
+
+async def _wiz_send(c: CallbackQuery, w: dict, user: User):
+    from app import reschedule as rs
+
+    keys = [k for k in w["keys"] if k in w["opts"]]
+    auto, manual = [], []
+    with SessionLocal() as s:
+        for oid in sorted(w["sel"]):
+            o = s.scalar(sv.order_query().where(Order.id == oid))
+            r = rs.offer(s, o, keys, w["bonus"], created_by=user.tg_id) if o else None
+            if not r:
+                continue
+            s.commit()
+            sent = await rs.send_offer(s, r)
+            if sent:
+                auto.append(f"• {sv.esc(o.client.name)} — {notify.channels_label(sent)}")
+            else:
+                manual.append((o.client.name, o.client.phone, rs.wa_link(r)))
+    lines = ["⏰ <b>Перенос отправлен</b>"]
+    if auto:
+        lines += ["Ушло автоматически:"] + auto
+    if manual:
+        lines.append("\nНе подписаны — отправь в WhatsApp (текст уже готов) или позвони:")
+    lines.append(f"\nЗаказы пока стоят на первом варианте. Кто не ответит за "
+                 f"{settings.reschedule_remind_min // 60} ч — напомню.")
+    await c.message.answer("\n".join(lines))
+    for name, phone, wa in manual:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 WhatsApp", url=wa)]]) if wa else None
+        await c.message.answer(f"👤 {sv.esc(name)} · 📞 {sv.esc(sv.fmt_phone(phone)) or 'нет телефона'}",
+                               reply_markup=kb)
+
+
+async def remind_reschedules(bot: Bot):
+    """Кто не ответил на перенос за RESCHEDULE_REMIND_MIN — напоминаем всем сотрудникам с кнопками выбора."""
+    from app import reschedule as rs
+
+    with SessionLocal() as s:
+        ids = [u.tg_id for u in sv.all_users(s)]
+        for r in rs.due_reminders(s):
+            o = s.scalar(sv.order_query().where(Order.id == r.order_id))
+            text = (f"⏰ <b>Не ответил(а) про перенос:</b> {sv.esc(o.client.name)}\n"
+                    f"📞 {sv.esc(sv.fmt_phone(o.client.phone)) or 'нет телефона'}\n"
+                    f"Сейчас стоит: {sv.esc(sv.day_slot_label(o.date, o.slot))}\n"
+                    "Позвони и отметь, что выбрал клиент:")
+            rows = [[_btn(x["label"], f"rs:pick:{r.id}:{i}")] for i, x in enumerate(r.options)]
+            wa = rs.wa_link(r)
+            if wa:
+                rows.append([InlineKeyboardButton(text="💬 WhatsApp", url=wa)])
+            for tg_id in ids:
+                try:
+                    await bot.send_message(tg_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+                except Exception:
+                    log.exception("reschedule reminder to %s failed", tg_id)
+            r.reminded = True
+            s.commit()
 
 
 async def broadcast_day(bot: Bot, offset: int):

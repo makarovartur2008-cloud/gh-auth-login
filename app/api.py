@@ -55,9 +55,10 @@ def order_out(o: Order) -> dict:
     return dict(
         id=o.id, date=o.date.isoformat(), status=o.status, payment=o.payment, via_friend=o.via_friend,
         friend_fee=o.friend_fee, notes=o.notes, recurring_id=o.recurring_id, total=o.total, source=o.source,
-        client=client_out(o.client),
+        slot=o.slot, bonus=sv.bonus_label(o.bonus), client=client_out(o.client),
         items=[dict(product_id=i.product_id, name=i.product.name, emoji=i.product.emoji, unit=i.product.unit,
-                    qty=i.qty, price=i.price, sum=round(i.qty * i.price)) for i in o.items],
+                    qty=i.qty, price=i.price, sum=round(i.qty * i.price), gift=bool(o.bonus and i.price == 0))
+               for i in o.items],
     )
 
 
@@ -99,10 +100,12 @@ class OrderIn(BaseModel):
     notes: str = ""
     via_friend: bool | None = None
     every_days: int | None = None
+    slot: str = ""
 
 
 class OrderPatch(BaseModel):
     date: dt.date | None = None
+    slot: str | None = None
     items: list[ItemIn] | None = None
     notes: str | None = None
     via_friend: bool | None = None
@@ -253,6 +256,7 @@ def add_order(body: OrderIn, s: Session = Depends(get_db), u: User = Depends(cur
     via_friend = body.via_friend if body.via_friend is not None else u.role != "owner"
     o = sv.create_order(s, client, body.date, [i.model_dump() for i in body.items], notes=body.notes,
                         via_friend=via_friend, created_by=u.tg_id)
+    o.slot = "evening" if body.slot == "evening" else ""
     if body.every_days:
         sv.make_recurring(s, o, body.every_days)
     s.commit()
@@ -262,8 +266,9 @@ def add_order(body: OrderIn, s: Session = Depends(get_db), u: User = Depends(cur
 @router.patch("/orders/{oid}")
 def edit_order(oid: int, body: OrderPatch, s: Session = Depends(get_db), u: User = Depends(current_user)):
     o = s.scalar(sv.order_query().where(Order.id == oid)) or _404()
-    if body.date:
-        sv.move_order(o, body.date)
+    if body.date or body.slot is not None:
+        slot = None if body.slot is None else ("evening" if body.slot == "evening" else "")
+        sv.move_order(o, body.date or o.date, slot)
     if body.items is not None:
         sv.set_items(s, o, [i.model_dump() for i in body.items])
     if body.notes is not None:
@@ -352,9 +357,12 @@ def delete_expense(eid: int, s: Session = Depends(get_db), u: User = Depends(cur
 
 
 def route_out(plan, route: list[Order]) -> dict:
+    ev = plan.evening
     return dict(
         day=plan.day.isoformat(), departure=plan.departure, total_km=plan.total_km, total_min=plan.total_min,
-        yandex_url=plan.yandex_url, osrm=plan.osrm,
+        yandex_url=plan.yandex_url, osrm=plan.osrm, day_stops=plan.stops,
+        evening=dict(departure=ev.departure, total_km=ev.total_km, total_min=ev.total_min, stops=ev.stops,
+                     yandex_url=ev.yandex_url) if ev and ev.stops else None,
         stops=[dict(order_id=o.id, pos=o.route_pos, eta_from=o.eta_from, eta_to=o.eta_to, name=o.client.name,
                     address=sv.client_label(o.client), lat=o.client.lat, lon=o.client.lon,
                     geocoded=o.client.lat is not None) for o in route],

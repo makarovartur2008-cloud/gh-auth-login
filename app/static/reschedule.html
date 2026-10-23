@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Время доставки</title>
+  <style>
+    :root { --bg: #f6f3ec; --card: #fff; --text: #1d1d1b; --hint: #77736a; --green: #2e7d32; --green2: #e7f2e3; --red: #c62828; --line: #e6e1d6; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #151714; --card: #1f221e; --text: #ecebe6; --hint: #9a978f; --green: #5cb860; --green2: #22301f; --line: #30342d; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+    main { max-width: 560px; margin: 0 auto; padding: 16px 16px 110px; }
+    h1 { font-size: 24px; margin: 8px 0 6px; line-height: 1.2; }
+    h2 { font-size: 18px; margin: 22px 0 8px; }
+    .sub { color: var(--hint); margin: 0 0 8px; }
+    .card { background: var(--card); border-radius: 14px; padding: 12px 14px; margin: 8px 0; }
+    .note { background: var(--green2); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+    .opt { display: block; width: 100%; text-align: left; font: inherit; color: var(--text); background: var(--card);
+      border: 1.5px solid var(--line); border-radius: 12px; padding: 13px 14px; margin: 8px 0; cursor: pointer; }
+    .opt.on { border-color: var(--green); background: var(--green2); color: var(--green); font-weight: 600; }
+    .gifts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .gifts .opt { text-align: center; margin: 0; padding: 12px 6px; }
+    .gifts .opt b { display: block; font-size: 26px; }
+    .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+    .bar button { display: block; width: 100%; max-width: 560px; margin: 0 auto; border: 0; border-radius: 14px; background: var(--green); color: #fff; font: inherit; font-weight: 700; padding: 15px; cursor: pointer; }
+    .bar button:disabled { opacity: .5; }
+    .err { color: var(--red); font-size: 14px; margin-top: 8px; }
+    .done { text-align: center; padding-top: 50px; }
+    .done .big { font-size: 60px; }
+    a { color: var(--green); font-weight: 600; text-decoration: none; }
+  </style>
+</head>
+<body>
+<main id="app"><p class="sub">Загрузка…</p></main>
+<div class="bar" id="bar" hidden><button id="send" disabled>Подтвердить</button></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const token = location.pathname.split("/").filter(Boolean).pop();
+let info, pick = null, gift = "";
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k.startsWith("on") ? e.addEventListener(k.slice(2), v) : e.setAttribute(k, v);
+  e.append(...kids.filter((x) => x !== null && x !== undefined && x !== false));
+  return e;
+}
+const money = (v) => Math.round(v).toLocaleString("ru-RU") + " ₽";
+const phoneLink = () => info.phone ? el("a", { href: "tel:" + info.phone.replace(/[^\d+]/g, "") }, info.phone) : null;
+
+function canSend() { return pick !== null && (!info.bonus_choices.length || gift); }
+
+function render() {
+  const app = $("app");
+  if (info.mode === "closed") {
+    $("bar").hidden = true;
+    app.replaceChildren(el("h1", {}, `Заказ №${info.order_id}`),
+      el("p", {}, info.status === "done" ? "Заказ уже доставлен. Спасибо! 🙏" : "Заказ отменён."),
+      info.phone ? el("p", { class: "sub" }, "Вопросы: ", phoneLink()) : null);
+    return;
+  }
+  const offer = info.mode === "offer";
+  const head = offer
+    ? [el("h1", {}, "Извините, доставка переносится 🙏"),
+       el("p", {}, `Заказ №${info.order_id} на ${info.apology} не успеваем привезти — задержались на закупке товара.`),
+       info.bonus_choices.length
+         ? el("div", { class: "note" }, "🎁 В качестве извинения дарим 5 кг овощей — выберите, каких:")
+         : info.bonus ? el("div", { class: "note" }, `🎁 В качестве извинения дарим ${info.bonus}.`) : null]
+    : [el("h1", {}, `Перенести доставку заказа №${info.order_id}`),
+       el("p", { class: "sub" }, `Сейчас: ${info.current}${info.eta ? ", " + info.eta : ""}`),
+       info.bonus ? el("div", { class: "note" }, `🎁 Ваш подарок: ${info.bonus} — сохранится при переносе.`) : null];
+
+  const gifts = info.bonus_choices.length
+    ? el("div", { class: "gifts" }, ...info.bonus_choices.map((b) =>
+        el("button", { type: "button", class: "opt" + (gift === b.key ? " on" : ""), onclick: () => { gift = b.key; render(); } },
+          el("b", {}, b.emoji), b.label)))
+    : null;
+
+  const opts = info.options.map((o, i) =>
+    el("button", { type: "button", class: "opt" + (pick === i ? " on" : ""), onclick: () => { pick = i; render(); } },
+      (pick === i ? "✅ " : "") + o.label));
+
+  app.replaceChildren(...[...head, gifts,
+    el("h2", {}, "Когда вам удобно?"), ...opts,
+    el("div", { class: "card" }, el("div", { class: "sub" }, `Заказ №${info.order_id} · ${money(info.total)}`),
+      ...info.items.map((t) => el("div", {}, "• " + t))),
+    info.phone ? el("p", { class: "sub" }, "Если ни один вариант не подходит — позвоните: ", phoneLink()) : null,
+    el("div", { class: "err", id: "err" })].filter(Boolean));
+  $("bar").hidden = false;
+  $("send").disabled = !canSend();
+  $("send").textContent = info.bonus_choices.length && !gift ? "Выберите подарок" : pick === null ? "Выберите время" : "Подтвердить";
+}
+
+async function send() {
+  if (!canSend()) return;
+  $("send").disabled = true;
+  const o = info.options[pick];
+  try {
+    const res = await fetch(`/api/public/resched/${encodeURIComponent(token)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date: o.date, slot: o.slot, bonus: gift }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Не получилось, попробуйте ещё раз");
+    $("bar").hidden = true;
+    $("app").replaceChildren(el("div", { class: "done" }, el("div", { class: "big" }, "✅"),
+      el("h1", {}, "Записали!"), el("p", {}, data.text),
+      info.phone ? el("p", { class: "sub" }, "Вопросы: ", phoneLink()) : null));
+    window.scrollTo(0, 0);
+  } catch (e) {
+    $("err").textContent = "⚠️ " + e.message;
+    $("send").disabled = false;
+    if (/недоступен/.test(e.message)) load();
+  }
+}
+
+async function load() {
+  try {
+    const res = await fetch(`/api/public/resched/${encodeURIComponent(token)}`);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Ссылка устарела");
+    info = await res.json();
+    pick = null;
+    render();
+  } catch (e) {
+    $("app").replaceChildren(el("h1", {}, "Не получилось открыть"), el("p", { class: "sub" }, e.message));
+  }
+}
+
+$("send").addEventListener("click", send);
+load();
+</script>
+</body>
+</html>

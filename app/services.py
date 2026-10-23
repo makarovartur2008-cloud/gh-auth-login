@@ -204,11 +204,13 @@ def set_status(order: Order, status: str, payment: str | None = None):
         order.payment = None
 
 
-def move_order(order: Order, day: date):
-    """Перенос на другой день: старое время доставки и «время уже сообщили» больше не годятся."""
-    if order.date == day:
+def move_order(order: Order, day: date, slot: str | None = None):
+    """Перенос на другой день/рейс: старое время доставки и «время уже сообщили» больше не годятся."""
+    slot = order.slot if slot is None else slot
+    if order.date == day and order.slot == slot:
         return
     order.date = day
+    order.slot = slot
     order.route_pos = None
     order.eta_from = order.eta_to = ""
     order.eta_notified = False
@@ -384,6 +386,57 @@ def period(name: str) -> tuple[date, date]:
     return t, t
 
 
+# ---------- рейсы и подарки ----------
+
+SLOT_NAMES = {"": "днём", "evening": "вечером"}
+
+# подарок за перенос: ключ -> (название товара в прайсе, как называем клиенту)
+BONUSES = {
+    "carrot": ("Морковь", "моркови"),
+    "beet": ("Свёкла", "свёклы"),
+    "onion": ("Лук", "лука"),
+}
+BONUS_EMOJI = {"carrot": "🥕", "beet": "🟣", "onion": "🧅"}
+
+
+def evening_window() -> str:
+    return f"{settings.evening_start}–{settings.evening_end}"
+
+
+def bonus_label(key: str) -> str:
+    """«5 кг моркови» — без единицы, если ключ неизвестен."""
+    if key not in BONUSES:
+        return ""
+    return f"{fmt_qty(settings.bonus_kg)} кг {BONUSES[key][1]}"
+
+
+def day_slot_label(day: date, slot: str) -> str:
+    """«Сегодня вечером (18:00–21:00)», «Завтра днём», «Пт 24.10 вечером (18:00–21:00)»."""
+    t = today()
+    word = {t: "Сегодня", t + timedelta(days=1): "Завтра", t + timedelta(days=2): "Послезавтра"}.get(day)
+    head = word or f"{WEEKDAYS[day.weekday()].capitalize()} {day.strftime('%d.%m')}"
+    if slot == "evening":
+        return f"{head} вечером ({evening_window()})"
+    return f"{head} днём"
+
+
+def apply_bonus(s: Session, order: Order, key: str):
+    """Кладёт в заказ подарок (цена 0, закупка считается в прибыли). Прежний подарок убираем."""
+    if order.bonus in BONUSES:
+        name = BONUSES[order.bonus][0]
+        for i in list(order.items):
+            if i.price == 0 and i.product and i.product.name == name:
+                order.items.remove(i)
+    order.bonus = ""
+    if key not in BONUSES:
+        return
+    product = s.scalar(select(Product).where(Product.name == BONUSES[key][0]))
+    if not product:
+        return
+    order.items.append(OrderItem(product=product, qty=settings.bonus_kg, price=0, cost=product.cost))
+    order.bonus = key
+
+
 # ---------- время доставки ----------
 
 
@@ -409,10 +462,15 @@ def order_text(o: Order, with_date: bool = False) -> str:
     addr = client_label(c)
     if addr:
         lines.append(f"📍 {esc(addr)}")
+    if o.slot == "evening":
+        lines.append(f"🌙 вечерний рейс {evening_window()}")
     if o.status == "new" and o.eta_from and o.eta_to:
         lines.append(f"🕑 {o.eta_from}–{o.eta_to}")
     for i in o.items:
         p = i.product
+        if i.price == 0 and o.bonus:
+            lines.append(f"🎁 {esc(p.name)} — {fmt_qty(i.qty)} {p.unit} в подарок")
+            continue
         lines.append(f"{p.emoji or '•'} {esc(p.name)} — {fmt_qty(i.qty)} {p.unit} × {fmt_qty(i.price)} = "
                      f"{fmt_money(i.qty * i.price)}")
     lines.append(f"💰 <b>{fmt_money(o.total)}</b>")
