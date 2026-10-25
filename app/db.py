@@ -51,6 +51,7 @@ class Product(Base):
     emoji: Mapped[str] = mapped_column(String(8), default="")
     sort: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    photo: Mapped[str] = mapped_column(String(80), default="")  # файл в папке photos рядом с базой
 
 
 class Client(Base):
@@ -190,7 +191,8 @@ class Expense(Base):
 DEFAULT_PRODUCTS = [
     dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
     dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
-    dict(name="Лук", unit="кг", price=40, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Лук круглый", unit="кг", price=40, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Лук плоский", unit="кг", price=40, cost=20, min_qty=5, emoji="🧅"),
     dict(name="Лук красный", unit="кг", price=80, cost=20, min_qty=5, emoji="🧅"),
     dict(name="Морковь", unit="кг", price=40, cost=25, min_qty=5, emoji="🥕"),
     # мытую берём только мешками — продаём от 20 кг
@@ -228,6 +230,7 @@ NEW_COLUMNS = [
     ("clients", "geo_address", "VARCHAR(250) DEFAULT '' NOT NULL"),
     ("clients", "tg_chat_id", "INTEGER"),
     ("clients", "max_chat_id", "VARCHAR(40) DEFAULT '' NOT NULL"),
+    ("products", "photo", "VARCHAR(80) DEFAULT '' NOT NULL"),
 ]
 
 
@@ -252,6 +255,17 @@ def migrate(engine):
             for name, old, new in MIN_QTY_V1:
                 conn.exec_driver_sql("UPDATE products SET min_qty = ? WHERE name = ? AND min_qty = ?", (new, name, old))
             conn.exec_driver_sql("PRAGMA user_version = 1")
+        # лук бывает круглый и плоский: «Лук» → «Лук круглый», рядом добавляем плоский
+        if conn.exec_driver_sql("PRAGMA user_version").scalar() < 2:
+            row = conn.exec_driver_sql("SELECT sort FROM products WHERE name = 'Лук'").fetchone()
+            if row:
+                conn.exec_driver_sql("UPDATE products SET name = 'Лук круглый' WHERE name = 'Лук'")
+                if not conn.exec_driver_sql("SELECT 1 FROM products WHERE name = 'Лук плоский'").fetchone():
+                    conn.exec_driver_sql("UPDATE products SET sort = sort + 1 WHERE sort > ?", (row[0],))
+                    conn.exec_driver_sql(
+                        "INSERT INTO products (name, unit, price, cost, min_qty, emoji, sort, active, photo) "
+                        "VALUES ('Лук плоский', 'кг', 40, 20, 5, '🧅', ?, 1, '')", (row[0] + 1,))
+            conn.exec_driver_sql("PRAGMA user_version = 2")
 
 
 def init_db(engine) -> sessionmaker:

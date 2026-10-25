@@ -97,7 +97,7 @@ def test_answer_with_gift_choice_and_new_offer_replaces_old(s, morning):
     assert label.endswith("вечером (18:00–21:00)") and o.slot == "evening" and o.bonus == "beet"
     # смена подарка не копит подарки
     sv.apply_bonus(s, o, "onion")
-    assert [i.product.name for i in o.items if i.price == 0] == ["Лук"]
+    assert [i.product.name for i in o.items if i.price == 0] == ["Лук круглый"]
 
 
 def test_preview_does_not_touch_db(s, morning):

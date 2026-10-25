@@ -33,11 +33,11 @@ def body(**kw):
 
 def test_info_hides_products_without_price(client):
     with SessionLocal() as s:
-        s.query(Product).filter_by(name="Лук").one().price = 0
+        s.query(Product).filter_by(name="Лук круглый").one().price = 0
         s.commit()
     info = client.get("/api/public/info").json()
     names = [p["name"] for p in info["products"]]
-    assert "Картошка белая" in names and "Лук" not in names
+    assert "Картошка белая" in names and "Лук круглый" not in names and "Лук плоский" in names
     assert len(info["days"]) == public.DAYS_AHEAD
 
 
@@ -132,3 +132,4 @@ def test_one_sack_of_potato_is_enough(client):
 def test_flyer_shows_new_minimums(client):
     html = client.get("/flyer").text
     assert "Картошка от 1 сетки (25 кг)" in html and "от 20 кг" in html and "50 кг" not in html
+    assert "1 125 ₽/сетка" in html

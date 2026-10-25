@@ -62,3 +62,31 @@ def test_full_flow(client):
     assert edit["price"] == 50
 
     assert client.get("/").status_code == 200
+
+
+def test_product_photo_upload_serve_and_delete(client):
+    import base64
+
+    from app import photos
+
+    potato = client.get("/api/products").json()[0]
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64  # для проверки хватает «подписи» PNG
+    data = "data:image/png;base64," + base64.b64encode(png).decode()
+    out = client.post(f"/api/products/{potato['id']}/photo", json={"data": data}).json()
+    assert out["photo"].startswith("/photos/") and out["photo"].endswith(".png")
+    assert client.get(out["photo"]).content == png
+    info = client.get("/api/public/info").json()
+    assert next(p for p in info["products"] if p["id"] == potato["id"])["photo"] == out["photo"]
+
+    # замена удаляет старый файл
+    old = photos.path(out["photo"].rsplit("/", 1)[1])
+    again = client.post(f"/api/products/{potato['id']}/photo", json={"data": data}).json()
+    assert again["photo"] != out["photo"] and not old.exists()
+
+    # не картинка и чужие пути не проходят
+    bad = "data:image/png;base64," + base64.b64encode(b"<script>").decode()
+    assert client.post(f"/api/products/{potato['id']}/photo", json={"data": bad}).status_code == 400
+    assert client.get("/photos/..%2Fapp.db").status_code == 404
+
+    gone = client.delete(f"/api/products/{potato['id']}/photo").json()
+    assert gone["photo"] == "" and client.get(again["photo"]).status_code == 404

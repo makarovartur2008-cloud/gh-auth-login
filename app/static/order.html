@@ -16,14 +16,19 @@
     h2 { font-size: 18px; margin: 22px 0 8px; }
     .sub { color: var(--hint); margin: 0 0 8px; }
     .card { background: var(--card); border-radius: 14px; padding: 12px 14px; margin: 8px 0; }
-    .prod { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-    .prod:last-child { border-bottom: 0; }
-    .prod .info { flex: 1; min-width: 0; }
-    .prod .name { font-weight: 600; }
-    .prod .price { color: var(--hint); font-size: 14px; }
-    .step { display: flex; align-items: center; gap: 4px; }
-    .step button { width: 38px; height: 38px; border-radius: 19px; border: 0; background: var(--green2); color: var(--green); font-size: 22px; line-height: 1; cursor: pointer; }
-    .step span { min-width: 64px; text-align: center; font-weight: 600; font-size: 15px; }
+    /* товары — плитки с фото, по две в ряд */
+    .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+    .tile { background: var(--card); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; border: 2px solid transparent; }
+    .tile.on { border-color: var(--green); }
+    .tile .pic { aspect-ratio: 1 / 1; background: var(--green2); display: flex; align-items: center; justify-content: center; font-size: 64px; }
+    .tile .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .tile .body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
+    .tile .name { font-weight: 600; line-height: 1.2; }
+    .tile .price { color: var(--text); font-weight: 600; font-size: 15px; }
+    .tile .more { color: var(--hint); font-size: 13px; line-height: 1.25; }
+    .step { display: flex; align-items: center; gap: 4px; margin-top: auto; padding-top: 8px; }
+    .step button { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 18px; border: 0; background: var(--green2); color: var(--green); font-size: 22px; line-height: 1; cursor: pointer; }
+    .step span { flex: 1; text-align: center; font-weight: 600; font-size: 13px; line-height: 1.15; }
     .step span.zero { color: var(--hint); font-weight: 400; }
     .days { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: none; }
     .days::-webkit-scrollbar { display: none; }
@@ -58,7 +63,7 @@
 
   <h2>1. Что привезти</h2>
   <p class="sub note" id="note">🥔 Возим только вместе с картошкой. Лук, морковь, свёклу и мёд добавим к заказу.</p>
-  <div class="card" id="products">Загрузка…</div>
+  <div class="tiles" id="products">Загрузка…</div>
 
   <h2>2. Когда привезти</h2>
   <div class="days" id="days"></div>
@@ -131,13 +136,23 @@ function renderProducts() {
       qty[p.id] = next;
       renderProducts();
     };
-    return el("div", { class: "prod" },
-      el("div", { class: "info" }, el("div", { class: "name" }, `${p.emoji} ${p.name}`),
-        el("div", { class: "price" }, `${fmt(p.price)} ₽/${unit}` + (p.potato ? ` · от ${fmt(minOf(p))} кг (сетка ${info.sack_kg} кг)` : p.min_qty ? ` · от ${fmt(p.min_qty)} ${unit === "кг" ? "кг" : "шт"}` : ""))),
-      el("div", { class: "step" },
-        el("button", { type: "button", "aria-label": "меньше", onclick: () => change(-1) }, "−"),
-        el("span", { class: q ? "" : "zero" }, label(p, q)),
-        el("button", { type: "button", "aria-label": "больше", onclick: () => change(1) }, "+")));
+    // картошка — цена за сетку крупно, за кг мелко; остальное — за кг и минимум
+    const price = p.potato ? `${money(p.price * info.sack_kg)} за сетку` : `${fmt(p.price)} ₽/${unit}`;
+    const more = p.potato
+      ? `${info.sack_kg} кг · ${fmt(p.price)} ₽/кг` + (minOf(p) > info.sack_kg ? ` · ${potatoMin()}` : "")
+      : p.min_qty ? `от ${fmt(p.min_qty)} ${unit === "кг" ? "кг" : "шт"}` : "";
+    const pic = p.photo
+      ? el("div", { class: "pic" }, el("img", { src: p.photo, alt: p.name, loading: "lazy" }))
+      : el("div", { class: "pic" }, p.emoji || "🥬");
+    return el("div", { class: "tile" + (q ? " on" : "") }, pic,
+      el("div", { class: "body" },
+        el("div", { class: "name" }, p.name),
+        el("div", { class: "price" }, price),
+        more ? el("div", { class: "more" }, more) : "",
+        el("div", { class: "step" },
+          el("button", { type: "button", "aria-label": "меньше", onclick: () => change(-1) }, "−"),
+          el("span", { class: q ? "" : "zero" }, label(p, q)),
+          el("button", { type: "button", "aria-label": "больше", onclick: () => change(1) }, "+"))));
   }));
   const total = info.products.reduce((a, p) => a + (qty[p.id] || 0) * p.price, 0);
   $("total").textContent = money(total);

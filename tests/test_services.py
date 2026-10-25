@@ -109,8 +109,8 @@ def test_old_minimums_migrated_once(s):
     from app.db import engine, migrate
 
     potato = s.query(Product).filter_by(name="Картошка белая").one()
-    onion = s.query(Product).filter_by(name="Лук").one()
-    potato.min_qty, onion.min_qty = 50, 0  # как в базе до изменения
+    onion = s.query(Product).filter_by(name="Лук круглый").one()
+    potato.min_qty, onion.min_qty, onion.name = 50, 0, "Лук"  # как в базе до изменения
     s.commit()
     with engine.begin() as conn:
         conn.exec_driver_sql("PRAGMA user_version = 0")
@@ -131,3 +131,22 @@ def test_potato_min_text(s):
         if sv.is_potato(p):
             p.min_qty = 50
     assert sv.potato_min_text(items) == "от 2 сеток (50 кг)"
+
+
+def test_onion_split_migration(s):
+    from app.db import engine, migrate
+
+    flat = s.query(Product).filter_by(name="Лук плоский").one()
+    s.delete(flat)
+    onion = s.query(Product).filter_by(name="Лук круглый").one()
+    onion.name = "Лук"  # старая база: один «Лук»
+    s.commit()
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA user_version = 1")
+    migrate(engine)
+    s.expire_all()
+    names = [p.name for p in sv.products(s)]
+    assert names[names.index("Лук круглый") + 1] == "Лук плоский"
+    assert names.count("Лук плоский") == 1 and "Лук" not in names
+    migrate(engine)  # повторно — ничего не добавляет
+    assert [p.name for p in sv.products(s)].count("Лук плоский") == 1

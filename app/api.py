@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import photos
 from app import services as sv
 from app.config import settings
 from app.db import Client, Expense, Order, Product, Recurring, SessionLocal, User
@@ -43,7 +44,7 @@ def current_user(
 
 def product_out(p: Product) -> dict:
     return dict(id=p.id, name=p.name, unit=p.unit, price=p.price, cost=p.cost, min_qty=p.min_qty,
-                emoji=p.emoji, active=p.active, sort=p.sort)
+                emoji=p.emoji, active=p.active, sort=p.sort, photo=photos.url(p.photo))
 
 
 def client_out(c: Client) -> dict:
@@ -127,6 +128,10 @@ class ExpenseIn(BaseModel):
     note: str = ""
 
 
+class PhotoIn(BaseModel):
+    data: str  # data:image/jpeg;base64,... — приложение заранее ужимает фото
+
+
 class ProductIn(BaseModel):
     name: str
     unit: str = "кг"
@@ -165,6 +170,28 @@ def edit_product(pid: int, body: ProductIn, s: Session = Depends(get_db), u: Use
     for k, v in body.model_dump().items():
         setattr(p, k, v)
     s.commit()
+    return product_out(p)
+
+
+@router.post("/products/{pid}/photo")
+def set_product_photo(pid: int, body: PhotoIn, s: Session = Depends(get_db), u: User = Depends(current_user)):
+    p = s.get(Product, pid) or _404()
+    try:
+        name = photos.save(p.id, body.data)
+    except photos.PhotoError as e:
+        raise HTTPException(400, str(e))
+    old, p.photo = p.photo, name
+    s.commit()
+    photos.remove(old)
+    return product_out(p)
+
+
+@router.delete("/products/{pid}/photo")
+def delete_product_photo(pid: int, s: Session = Depends(get_db), u: User = Depends(current_user)):
+    p = s.get(Product, pid) or _404()
+    old, p.photo = p.photo, ""
+    s.commit()
+    photos.remove(old)
     return product_out(p)
 
 

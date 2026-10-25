@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app import notify
+from app import notify, photos
 from app import services as sv
 from app.api import get_db
 from app.config import settings
@@ -67,7 +67,7 @@ def info(s: Session = Depends(get_db)):
         days=[dict(date=(t + timedelta(days=i)).isoformat(), label=sv.fmt_date(t + timedelta(days=i)))
               for i in range(DAYS_AHEAD)],
         products=[dict(id=p.id, name=p.name, unit=p.unit, price=p.price, min_qty=p.min_qty, emoji=p.emoji,
-                       potato=sv.is_potato(p))
+                       potato=sv.is_potato(p), photo=photos.url(p.photo))
                   for p in public_products(s)],
     )
 
@@ -248,6 +248,15 @@ def qr_svg(request: Request, s: str = ""):
     return HTMLResponse(svg, media_type="image/svg+xml")
 
 
+@router.get("/photos/{name}")
+def photo(name: str):
+    p = photos.path(name)
+    if not p:
+        raise HTTPException(404)
+    # имя файла меняется при каждой замене фото — можно кэшировать надолго
+    return FileResponse(p, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @router.get("/flyer", response_class=HTMLResponse)
 def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
     """Лист A4 с двумя листовками A5 (разрезать пополам). Печать: «Поделиться → Печать» или «Сохранить как PDF»."""
@@ -257,9 +266,12 @@ def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
     items = public_products(db)
     for p in items:
         unit = "кг" if p.unit == "кг" else "банка"
+        price = f"{sv.fmt_qty(p.price)} ₽/{unit}"
         note = f" <small>от {sv.fmt_qty(p.min_qty)} кг</small>" if p.min_qty else ""
-        prices.append(f"<li><span>{escape(p.emoji)} {escape(p.name)}{note}</span>"
-                      f"<b>{sv.fmt_qty(p.price)} ₽/{unit}</b></li>")
+        if sv.is_potato(p):  # картошку продаём сетками — цена за сетку крупно
+            note = f' <small class="line">сетка {settings.sack_kg} кг · {price}</small>'
+            price = f"{sv.fmt_money(p.price * settings.sack_kg)}/сетка"
+        prices.append(f"<li><span>{escape(p.emoji)} {escape(p.name)}{note}</span><b>{price}</b></li>")
     phone = sv.fmt_phone(settings.contact_phone) if settings.contact_phone else ""
     one = f"""
 <section class="a5">
@@ -293,6 +305,8 @@ h1 {{ font-size: 27pt; line-height: 1.05; margin: 0 0 3mm; color: #2e5e1e; }}
 .prices {{ list-style: none; margin: 0; padding: 0; font-size: 12.5pt; }}
 .prices li {{ display: flex; justify-content: space-between; gap: 4mm; padding: 1.4mm 0; border-bottom: 1px dotted #ccc; }}
 .prices small {{ color: #777; font-size: 9pt; }}
+.prices small.line {{ display: block; }}
+.prices b {{ white-space: nowrap; }}
 .pay {{ margin-top: auto; font-size: 10.5pt; font-weight: 600; color: #2e5e1e; }}
 .right {{ width: 68mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
   background: #f4f8ef; border-radius: 6mm; padding: 6mm; }}
