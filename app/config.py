@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     bot_token: str = ""
-    # Адрес приложения (https), например https://1-2-3-4.sslip.io
+    # Адрес приложения (https), например https://1-2-3-4.sslip.io или https://kartoshka-....amvera.io
     webapp_url: str = ""
 
     # ИИ: любой OpenAI-совместимый сервис (по умолчанию ProxyAPI — оплата в рублях)
@@ -22,15 +22,15 @@ class Settings(BaseSettings):
     morning_hour: int = 8
     evening_hour: int = 20
     friend_fee: int = 50
-    # Телефон на листовке и странице заказа (необязательно)
-    contact_phone: str = ""
+    # Телефон на листовке и странице заказа
+    contact_phone: str = "89083003917"
     sack_kg: int = 25
 
     # --- Маршрут и время доставки ---
     # Город — подставляется к адресам при поиске на карте (например «Екатеринбург»)
-    city: str = ""
+    city: str = "Самара"
     # Откуда выезжаешь утром (адрес склада/дома)
-    depot_address: str = ""
+    depot_address: str = "Олимпийская улица, 68"
     route_start: str = "10:00"  # во сколько выезд
     service_min: int = 10  # минут на одну точку (поднять мешки, рассчитаться)
     eta_window_min: int = 60  # ширина окна, которое называем клиенту
