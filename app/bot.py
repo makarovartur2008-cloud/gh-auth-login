@@ -1,7 +1,9 @@
 import logging
 import secrets
+import tempfile
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -9,6 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -17,7 +20,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
-from app import ai, client_bot, notify
+from app import ai, backup, client_bot, notify
 from app import services as sv
 from app.config import settings
 from app.db import Invite, Order, SessionLocal, User
@@ -46,6 +49,7 @@ HELP = f"""<b>Как пользоваться</b>
 {BTN_REPORT} — прибыль за день/неделю/месяц.
 ⏰ Не успеваешь? В списке доставок — «Перенести доставки»: бот извинится, подарит 5 кг овощей и даст клиенту выбрать время.
 📱 Приложение — клиенты, заказы на любой день, цены, расходы.
+💾 Каждый вечер присылаю копию базы — просто не удаляй её (/backup — прислать сейчас).
 
 Мешок/сетка картошки = {settings.sack_kg} кг. Каждое утро в {settings.morning_hour}:00 приходит список на сегодня,
 вечером в {settings.evening_hour}:00 — на завтра."""
@@ -148,6 +152,13 @@ async def users(m: Message):
     with SessionLocal() as s:
         lines = [f"{'👑' if u.role == 'owner' else '👤'} {sv.esc(u.name)} — id {u.tg_id}" for u in sv.all_users(s)]
     await m.answer("Доступ есть у:\n" + "\n".join(lines) + "\n\nУбрать: /remove id")
+
+
+@router.message(Command("backup"))
+async def backup_cmd(m: Message):
+    user = allowed(m.from_user.id)
+    if user and user.role == "owner":
+        await send_backup(m.bot, [user.tg_id])
 
 
 @router.message(Command("remove"))
@@ -653,6 +664,26 @@ async def broadcast_day(bot: Bot, offset: int):
             await send_day(bot, tg_id, offset)
         except Exception:
             log.exception("broadcast to %s failed", tg_id)
+
+
+async def send_backup(bot: Bot, tg_ids: list[int] | None = None):
+    """Файл базы владельцу: если сервер потеряет данные — из него всё восстанавливается."""
+    if tg_ids is None:
+        with SessionLocal() as s:
+            tg_ids = [u.tg_id for u in sv.all_users(s) if u.role == "owner"]
+    if not tg_ids:
+        return
+    day = sv.today()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = backup.make_copy(Path(tmp) / f"kartoshka-{day:%Y-%m-%d}.db")
+        clients, orders = backup.counts(path)
+        caption = (f"💾 Копия базы на {day:%d.%m.%Y}: клиентов {clients}, заказов {orders}.\n"
+                   "Ничего делать не нужно — просто не удаляй. Если что-то сломается, из этого файла всё восстановим.")
+        for tg_id in tg_ids:
+            try:
+                await bot.send_document(tg_id, FSInputFile(path), caption=caption, disable_notification=True)
+            except Exception:
+                log.exception("backup to %s failed", tg_id)
 
 
 async def notify_order(order_id: int, header: str):
