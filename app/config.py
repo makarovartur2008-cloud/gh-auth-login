@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     morning_hour: int = 8
     evening_hour: int = 20
+    backup_hour: int = 22  # в 22:30 бот присылает владельцу копию базы
     friend_fee: int = 50
     # Телефон на листовке и странице заказа
     contact_phone: str = "89083003917"
