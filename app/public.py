@@ -1,5 +1,6 @@
 """Публичная часть: страница заказа по QR-коду и листовка для печати. Вход без Telegram."""
 
+import logging
 import time
 from datetime import date, timedelta
 from html import escape
@@ -8,7 +9,7 @@ from urllib.parse import quote
 
 import segno
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,9 +17,10 @@ from app import notify, photos
 from app import services as sv
 from app.api import get_db
 from app.config import settings
-from app.db import Order, Product, SessionLocal
+from app.db import Order, Product, Review, SessionLocal
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 
 # Защита от спама: не больше LIMIT заявок с одного адреса за WINDOW секунд
@@ -149,6 +151,63 @@ async def notify_new_web_order(order_id: int, header: str):
         order = s.scalar(sv.order_query().where(Order.id == order_id))
         if order:
             await notify.notify_client(s, order, "accepted")
+
+
+# ---------- отзывы (/otzyv — QR на обороте визитки) ----------
+
+
+@router.get("/otzyv")
+def review_page():
+    if settings.review_url.startswith("https://"):
+        return RedirectResponse(settings.review_url)
+    return FileResponse(STATIC / "review.html", headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/api/public/review-info")
+def review_info():
+    phone = sv.fmt_phone(settings.contact_phone) if settings.contact_phone else ""
+    return dict(gift=settings.review_gift, phone=phone)
+
+
+class PublicReview(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(default="", max_length=30)
+    rating: int = Field(default=5, ge=1, le=5)
+    text: str = Field(default="", max_length=1500)
+    website: str = ""  # ловушка для ботов
+
+
+@router.post("/api/public/review")
+def post_review(body: PublicReview, request: Request, background: BackgroundTasks, s: Session = Depends(get_db)):
+    if body.website:
+        return {"ok": True}
+    if not body.text.strip() and body.rating >= 4:
+        raise HTTPException(400, "Напишите пару слов — что понравилось")
+    if rate_limited(client_ip(request)):
+        raise HTTPException(429, "Слишком много отзывов подряд. Попробуйте позже.")
+    r = Review(name=body.name.strip(), phone=body.phone.strip(), rating=body.rating, text=body.text.strip())
+    s.add(r)
+    s.commit()
+    background.add_task(notify_review, r.id)
+    return {"ok": True, "gift": settings.review_gift}
+
+
+async def notify_review(review_id: int):
+    from app import bot as staff_bot
+
+    with SessionLocal() as s:
+        r = s.get(Review, review_id)
+        if not r or staff_bot.BOT is None:
+            return
+        who = ", ".join(x for x in [sv.esc(r.name), sv.fmt_phone(r.phone) if r.phone else ""] if x)
+        text = (f"{'⭐' * r.rating} <b>Новый отзыв</b>\n{who}\n\n«{sv.esc(r.text) or 'без текста'}»\n\n"
+                f"🎁 За отзыв обещали {sv.esc(settings.review_gift)} к следующему заказу.")
+        ids = [u.tg_id for u in sv.all_users(s)]
+    for tg_id in ids:
+        try:
+            await staff_bot.BOT.send_message(tg_id, text)
+        except Exception:
+            log.exception("review notify %s failed", tg_id)
 
 
 # ---------- перенос доставки (/r/<token>) ----------

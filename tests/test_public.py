@@ -133,3 +133,51 @@ def test_flyer_shows_new_minimums(client):
     html = client.get("/flyer").text
     assert "Картошка от 1 сетки (25 кг)" in html and "от 20 кг" in html and "50 кг" not in html
     assert "1 125 ₽/сетка" in html
+
+
+def test_review_saved_and_page_served(client):
+    from app.db import Review
+
+    assert "Отправить отзыв" in client.get("/otzyv").text
+    assert client.get("/api/public/review-info").json()["gift"] == "5 кг моркови"
+    r = client.post("/api/public/review", json={"name": "Нина", "phone": "89001112233", "rating": 5,
+                                                 "text": "Картошка крупная, привезли вовремя"})
+    assert r.status_code == 200 and r.json()["gift"] == "5 кг моркови"
+    # пятёрка без текста — просим пару слов; ловушка для ботов ничего не пишет
+    assert client.post("/api/public/review", json={"name": "Б", "rating": 5}).status_code == 400
+    assert client.post("/api/public/review", json={"name": "Бот", "text": "x", "website": "spam"}).json()["ok"]
+    with SessionLocal() as s:
+        assert [(x.name, x.rating) for x in s.query(Review)] == [("Нина", 5)]
+
+
+def test_review_url_redirects(client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "review_url", "https://yandex.ru/maps/org/123/reviews/")
+    r = client.get("/otzyv", follow_redirects=False)
+    assert r.status_code in (302, 307) and r.headers["location"].startswith("https://yandex.ru/maps")
+
+
+def test_review_notifies_staff(monkeypatch):
+    import asyncio
+
+    from app import bot as staff_bot
+    from app.db import Review, User
+
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, **kw):
+            sent.append((chat_id, text))
+
+    monkeypatch.setattr(staff_bot, "BOT", FakeBot())
+    with SessionLocal() as s:
+        s.add(User(tg_id=7, name="Артур", role="owner"))
+        r = Review(name="Нина <b>", phone="89001112233", rating=4, text="Хорошо")
+        s.add(r)
+        s.commit()
+        rid = r.id
+    asyncio.run(public.notify_review(rid))
+    assert sent and sent[0][0] == 7
+    text = sent[0][1]
+    assert "⭐⭐⭐⭐ " in text and "&lt;b&gt;" in text and "5 кг моркови" in text

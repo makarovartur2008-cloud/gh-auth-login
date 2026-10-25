@@ -187,6 +187,17 @@ class Expense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class Review(Base):
+    """Отзыв со страницы /otzyv (QR на обороте визитки). За отзыв — подарок к следующему заказу."""
+    __tablename__ = "reviews"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    phone: Mapped[str] = mapped_column(String(30), default="")
+    rating: Mapped[int] = mapped_column(Integer, default=5)
+    text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 # Начальный прайс. Меняется в приложении во вкладке «Цены». Мёд свой — закупка 0.
 DEFAULT_PRODUCTS = [
     dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
