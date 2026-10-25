@@ -103,3 +103,31 @@ def test_order_text_renders(s):
     s.commit()
     text = sv.order_text(o)
     assert "&lt;Тест&gt;" in text and "под. 2" in text and "2 250 ₽" in text
+
+
+def test_old_minimums_migrated_once(s):
+    from app.db import engine, migrate
+
+    potato = s.query(Product).filter_by(name="Картошка белая").one()
+    onion = s.query(Product).filter_by(name="Лук").one()
+    potato.min_qty, onion.min_qty = 50, 0  # как в базе до изменения
+    s.commit()
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA user_version = 0")
+    migrate(engine)
+    s.expire_all()
+    assert (potato.min_qty, onion.min_qty) == (25, 5)
+    onion.min_qty = 0  # Артур сам поменял в приложении — повторный запуск не трогает
+    s.commit()
+    migrate(engine)
+    s.expire_all()
+    assert onion.min_qty == 0
+
+
+def test_potato_min_text(s):
+    items = sv.products(s)
+    assert sv.potato_min_text(items) == "от 1 сетки (25 кг)"
+    for p in items:
+        if sv.is_potato(p):
+            p.min_qty = 50
+    assert sv.potato_min_text(items) == "от 2 сеток (50 кг)"

@@ -26,7 +26,7 @@ def body(**kw):
     p = ids()
     d = dict(name="Нина", phone="8 900 111-22-33", address="Ленина 5", entrance="2", floor="3",
              date=(sv.today() + timedelta(days=1)).isoformat(), source="Ленина 5",
-             items=[{"product_id": p["Картошка белая"], "qty": 50}, {"product_id": p["Морковь"], "qty": 3}])
+             items=[{"product_id": p["Картошка белая"], "qty": 50}, {"product_id": p["Морковь"], "qty": 5}])
     d.update(kw)
     return d
 
@@ -44,7 +44,7 @@ def test_info_hides_products_without_price(client):
 def test_order_created_with_source(client):
     r = client.post("/api/public/order", json=body())
     assert r.status_code == 200, r.text
-    assert r.json()["total"] == 50 * 45 + 3 * 40
+    assert r.json()["total"] == 50 * 45 + 5 * 40
     with SessionLocal() as s:
         o = s.scalar(sv.order_query())
         assert o.source == "Ленина 5" and o.status == "new" and not o.via_friend
@@ -56,8 +56,14 @@ def test_validation(client):
     p = ids()
     assert client.post("/api/public/order", json=body(phone="123")).status_code == 400
     assert client.post("/api/public/order", json=body(date="2001-01-01")).status_code == 400
-    small = body(items=[{"product_id": p["Картошка белая"], "qty": 25}])
-    assert "от 50" in client.post("/api/public/order", json=small).json()["detail"]
+    small = body(items=[{"product_id": p["Картошка белая"], "qty": 20}])
+    assert "от 25" in client.post("/api/public/order", json=small).json()["detail"]
+    carrot = body(items=[{"product_id": p["Картошка белая"], "qty": 25}, {"product_id": p["Морковь"], "qty": 3}])
+    assert "от 5" in client.post("/api/public/order", json=carrot).json()["detail"]
+    washed = body(items=[{"product_id": p["Картошка белая"], "qty": 25}, {"product_id": p["Морковь мытая"], "qty": 10}])
+    assert "от 20" in client.post("/api/public/order", json=washed).json()["detail"]
+    no_potato = body(items=[{"product_id": p["Морковь"], "qty": 10}])
+    assert "от 1 сетки (25 кг)" in client.post("/api/public/order", json=no_potato).json()["detail"]
     with SessionLocal() as s:
         assert s.query(Order).count() == 0
 
@@ -115,3 +121,14 @@ def test_order_without_potato_rejected(client):
     with SessionLocal() as s:
         assert s.query(Order).count() == 0
     assert all("potato" in x for x in client.get("/api/public/info").json()["products"])
+
+
+def test_one_sack_of_potato_is_enough(client):
+    p = ids()
+    r = client.post("/api/public/order", json=body(items=[{"product_id": p["Картошка красная"], "qty": 25}]))
+    assert r.status_code == 200, r.text
+
+
+def test_flyer_shows_new_minimums(client):
+    html = client.get("/flyer").text
+    assert "Картошка от 1 сетки (25 кг)" in html and "от 20 кг" in html and "50 кг" not in html

@@ -115,7 +115,7 @@ async def create_public_order(body: PublicOrder, request: Request, background: B
             raise HTTPException(400, f"{p.name} — от {sv.fmt_qty(p.min_qty)} {p.unit}")
         items.append({"product_id": p.id, "qty": it.qty, "price": p.price})
     if not any(sv.is_potato(allowed[i["product_id"]]) for i in items):
-        raise HTTPException(400, f"Возим только вместе с картошкой — добавьте от 2 сеток ({2 * settings.sack_kg} кг)")
+        raise HTTPException(400, f"Возим только вместе с картошкой — добавьте {sv.potato_min_text(list(allowed.values()))}")
     if rate_limited(client_ip(request)):
         raise HTTPException(429, "Слишком много заявок. Позвоните нам или попробуйте позже.")
 
@@ -254,7 +254,8 @@ def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
     link = order_link(request, s)
     qr = segno.make(link, error="m").svg_inline(scale=10, border=0)
     prices = []
-    for p in public_products(db):
+    items = public_products(db)
+    for p in items:
         unit = "кг" if p.unit == "кг" else "банка"
         note = f" <small>от {sv.fmt_qty(p.min_qty)} кг</small>" if p.min_qty else ""
         prices.append(f"<li><span>{escape(p.emoji)} {escape(p.name)}{note}</span>"
@@ -264,7 +265,7 @@ def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
 <section class="a5">
   <div class="left">
     <h1>🥔 Картошка<br>с доставкой на дом</h1>
-    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Заказ от 2 сеток картошки (50 кг) — лук, морковь, свёклу и мёд добавим к ней</p>
+    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Картошка {sv.potato_min_text(items)} — лук, морковь, свёклу и мёд добавим к ней</p>
     <ul class="prices">{''.join(prices)}</ul>
     <p class="pay">Оплата при получении: наличные или перевод</p>
   </div>

@@ -316,8 +316,8 @@ async function orderForm(order, preset = {}) {
       }),
       h("div", { class: "row", style: "gap:6px;flex-wrap:wrap" },
         h("button", { class: "small", onclick: () => { const p = products[0]; items.push({ product_id: p.id, qty: p.min_qty || 1, price: p.price }); drawItems(); } }, "＋ товар"),
-        h("button", { class: "small", onclick: () => { const p = products.find((x) => x.min_qty) || products[0]; items.push({ product_id: p.id, qty: state.me.sack_kg * 2, price: p.price }); drawItems(); } },
-          `＋ 2 сетки картошки (${state.me.sack_kg * 2} кг)`)),
+        h("button", { class: "small", onclick: () => { const p = products.find((x) => /картош/i.test(x.name)) || products[0]; items.push({ product_id: p.id, qty: state.me.sack_kg, price: p.price }); drawItems(); } },
+          `＋ сетка картошки (${state.me.sack_kg} кг)`)),
       totalEl);
     drawTotal();
   }
@@ -325,7 +325,7 @@ async function orderForm(order, preset = {}) {
   function drawTotal() {
     const t = items.reduce((a, i) => a + (i.qty || 0) * (i.price || 0), 0);
     const prod = (i) => products.find((x) => x.id === i.product_id);
-    const warn = items.some((i) => prod(i)?.min_qty && i.qty < prod(i).min_qty) ? " (⚠️ картошка от 50 кг)"
+    const warn = items.some((i) => prod(i)?.min_qty && i.qty < prod(i).min_qty) ? " (⚠️ меньше минимума)"
       : !items.some((i) => i.qty > 0 && /картош/i.test(prod(i)?.name || "")) ? " (⚠️ без картошки не возим)" : "";
     fill(totalEl, h("span", {}, "Итого", warn ? h("span", { class: "hint" }, warn) : ""), h("span", {}, money(t)));
   }

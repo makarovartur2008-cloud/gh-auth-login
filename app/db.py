@@ -188,13 +188,14 @@ class Expense(Base):
 
 # Начальный прайс. Меняется в приложении во вкладке «Цены». Мёд свой — закупка 0.
 DEFAULT_PRODUCTS = [
-    dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
-    dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
-    dict(name="Лук", unit="кг", price=40, cost=20, emoji="🧅"),
-    dict(name="Лук красный", unit="кг", price=80, cost=20, emoji="🧅"),
-    dict(name="Морковь", unit="кг", price=40, cost=25, emoji="🥕"),
-    dict(name="Морковь мытая", unit="кг", price=70, cost=45, emoji="🥕"),
-    dict(name="Свёкла", unit="кг", price=40, cost=22, emoji="🟣"),
+    dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
+    dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
+    dict(name="Лук", unit="кг", price=40, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Лук красный", unit="кг", price=80, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Морковь", unit="кг", price=40, cost=25, min_qty=5, emoji="🥕"),
+    # мытую берём только мешками — продаём от 20 кг
+    dict(name="Морковь мытая", unit="кг", price=70, cost=45, min_qty=20, emoji="🥕"),
+    dict(name="Свёкла", unit="кг", price=40, cost=22, min_qty=5, emoji="🟣"),
     dict(name="Мёд липовый 1 л", unit="шт", price=700, cost=0, emoji="🍯"),
     dict(name="Мёд липовый 3 л", unit="шт", price=2000, cost=0, emoji="🍯"),
 ]
@@ -230,6 +231,12 @@ NEW_COLUMNS = [
 ]
 
 
+# Минимумы в заказе: картошка от 1 сетки (было 2), овощи от 5 кг, мытая морковь от 20 кг.
+# (товар, старое значение, новое) — меняем только нетронутые старые значения
+MIN_QTY_V1 = [("Картошка белая", 50, 25), ("Картошка красная", 50, 25), ("Лук", 0, 5), ("Лук красный", 0, 5),
+              ("Морковь", 0, 5), ("Морковь мытая", 0, 20), ("Свёкла", 0, 5)]
+
+
 def migrate(engine):
     """Добавляет новые колонки в уже существующую базу."""
     with engine.begin() as conn:
@@ -240,6 +247,11 @@ def migrate(engine):
         # старым заказам — свои токены
         for (oid,) in conn.exec_driver_sql("SELECT id FROM orders WHERE token = ''").fetchall():
             conn.exec_driver_sql("UPDATE orders SET token = ? WHERE id = ?", (secrets.token_urlsafe(12), oid))
+        # правки данных — по одному разу на базу (номер хранится в самом файле SQLite)
+        if conn.exec_driver_sql("PRAGMA user_version").scalar() < 1:
+            for name, old, new in MIN_QTY_V1:
+                conn.exec_driver_sql("UPDATE products SET min_qty = ? WHERE name = ? AND min_qty = ?", (new, name, old))
+            conn.exec_driver_sql("PRAGMA user_version = 1")
 
 
 def init_db(engine) -> sessionmaker:

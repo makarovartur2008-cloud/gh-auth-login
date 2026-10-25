@@ -57,7 +57,7 @@
   <p class="sub phone" id="phone"></p>
 
   <h2>1. Что привезти</h2>
-  <p class="sub note">🥔 Возим только вместе с картошкой: от 2 сеток (50 кг). Лук, морковь, свёклу и мёд добавим к заказу.</p>
+  <p class="sub note" id="note">🥔 Возим только вместе с картошкой. Лук, морковь, свёклу и мёд добавим к заказу.</p>
   <div class="card" id="products">Загрузка…</div>
 
   <h2>2. Когда привезти</h2>
@@ -97,12 +97,18 @@ function plural(n, one, few, many) {
   return b === 1 ? one : b >= 2 && b <= 4 ? few : many;
 }
 
-// шаг и минимум: картошка — сетками, мёд — банками, остальное — по 1 кг
-function stepOf(p) { return p.min_qty ? info.sack_kg : 1; }
+// шаг и минимум: картошка — сетками, мёд — банками, остальное — по 1 кг от минимума товара
+function stepOf(p) { return p.potato ? info.sack_kg : 1; }
 function minOf(p) { return p.min_qty || stepOf(p); }
+// «от 1 сетки (25 кг)» — как на сервере (services.potato_min_text)
+function potatoMin() {
+  const kg = Math.min(...info.products.filter((p) => p.potato).map(minOf), Infinity);
+  const k = Number.isFinite(kg) ? kg : info.sack_kg, n = k / info.sack_kg;
+  return `от ${fmt(n)} ${Number.isInteger(n) && n >= 2 ? "сеток" : "сетки"} (${fmt(k)} кг)`;
+}
 function label(p, q) {
   if (!q) return "—";
-  if (p.min_qty) return `${fmt(q / info.sack_kg)} ${plural(q / info.sack_kg, "сетка", "сетки", "сеток")} · ${fmt(q)} кг`;
+  if (p.potato) return `${fmt(q / info.sack_kg)} ${plural(q / info.sack_kg, "сетка", "сетки", "сеток")} · ${fmt(q)} кг`;
   return p.unit === "кг" ? `${fmt(q)} кг` : `${fmt(q)} шт`;
 }
 
@@ -127,7 +133,7 @@ function renderProducts() {
     };
     return el("div", { class: "prod" },
       el("div", { class: "info" }, el("div", { class: "name" }, `${p.emoji} ${p.name}`),
-        el("div", { class: "price" }, `${fmt(p.price)} ₽/${unit}` + (p.min_qty ? ` · от ${fmt(p.min_qty)} кг (сетка ${info.sack_kg} кг)` : ""))),
+        el("div", { class: "price" }, `${fmt(p.price)} ₽/${unit}` + (p.potato ? ` · от ${fmt(minOf(p))} кг (сетка ${info.sack_kg} кг)` : p.min_qty ? ` · от ${fmt(p.min_qty)} ${unit === "кг" ? "кг" : "шт"}` : ""))),
       el("div", { class: "step" },
         el("button", { type: "button", "aria-label": "меньше", onclick: () => change(-1) }, "−"),
         el("span", { class: q ? "" : "zero" }, label(p, q)),
@@ -153,7 +159,7 @@ async function send() {
     comment: $("comment").value.trim(), website: $("website").value, date: day, source,
     items: Object.entries(qty).filter(([, q]) => q > 0).map(([id, q]) => ({ product_id: +id, qty: q })),
   };
-  if (!hasPotato()) return showErr("Добавьте картошку — от 2 сеток (50 кг), остальное привезём вместе с ней");
+  if (!hasPotato()) return showErr(`Добавьте картошку — ${potatoMin()}, остальное привезём вместе с ней`);
   if (!body.name) return showErr("Укажите имя", "name");
   if (body.phone.replace(/\D/g, "").length < 10) return showErr("Укажите телефон, чтобы мы могли позвонить", "tel");
   if (body.address.length < 3) return showErr("Укажите адрес", "address");
@@ -201,6 +207,7 @@ function showErr(text, focusId) {
     return;
   }
   day = info.days[1]?.date || info.days[0].date; // по умолчанию — завтра
+  $("note").textContent = `🥔 Возим только вместе с картошкой: ${potatoMin()}. Лук, морковь, свёклу и мёд добавим к заказу.`;
   if (info.phone) $("phone").replaceChildren("Или звоните: ", el("a", { href: "tel:" + info.phone.replace(/[^\d+]/g, "") }, info.phone));
   try {
     const saved = JSON.parse(localStorage.getItem("kartoshka-client") || "null");
