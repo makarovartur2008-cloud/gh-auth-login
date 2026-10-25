@@ -636,7 +636,10 @@ function shrinkPhoto(file, max) {
   try {
     state.me = await api("/me");
   } catch (e) {
-    fill(view(), h("div", { class: "empty" }, "⛔ ", e.message));
+    const hint = tg && !tg.initData
+      ? "Открой приложение кнопкой «Приложение» слева от поля ввода в боте или командой /app."
+      : e.message;
+    fill(view(), h("div", { class: "empty" }, "⛔ ", hint));
     return;
   }
   state.today = state.me.today;

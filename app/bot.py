@@ -15,6 +15,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    MenuButtonWebApp,
     Message,
     ReplyKeyboardMarkup,
     WebAppInfo,
@@ -29,6 +30,7 @@ log = logging.getLogger(__name__)
 router = Router()
 
 BTN_TODAY, BTN_TOMORROW, BTN_REPORT, BTN_DEBTS = "📋 Сегодня", "📅 Завтра", "💰 Отчёт", "📝 Долги"
+BTN_APP = "📱 Приложение"
 
 # Распознанные, но ещё не подтверждённые сообщения: ключ -> (tg_id, Parsed)
 PENDING: dict[str, tuple[int, ai.Parsed]] = {}
@@ -59,8 +61,25 @@ def main_kb() -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=BTN_TODAY), KeyboardButton(text=BTN_TOMORROW)],
             [KeyboardButton(text=BTN_REPORT), KeyboardButton(text=BTN_DEBTS)]]
     if settings.webapp_url.startswith("https://"):
-        rows.append([KeyboardButton(text="📱 Приложение", web_app=WebAppInfo(url=settings.webapp_url))])
+        # обычная кнопка: Telegram не передаёт данные пользователя (initData) в приложение,
+        # открытое кнопкой нижней клавиатуры, — поэтому открываем его inline-кнопкой (app_cmd)
+        rows.append([KeyboardButton(text=BTN_APP)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def app_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📱 Открыть приложение", web_app=WebAppInfo(url=settings.webapp_url))]])
+
+
+async def set_menu_button(bot: Bot):
+    """Кнопка «Приложение» слева от поля ввода — открывает приложение с данными пользователя."""
+    if not settings.webapp_url.startswith("https://"):
+        return
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Приложение", web_app=WebAppInfo(url=settings.webapp_url)))
+    except Exception:
+        log.exception("Не удалось поставить кнопку меню с приложением")
 
 
 def order_kb(o: Order) -> InlineKeyboardMarkup | None:
@@ -278,6 +297,13 @@ async def route_cb(c: CallbackQuery):
     except Exception:  # старое сообщение уже нельзя редактировать — не страшно
         pass
     await send_day(c.bot, c.message.chat.id, offset, force_route=True)
+
+
+@router.message(F.text == BTN_APP)
+@router.message(Command("app"))
+async def app_cmd(m: Message):
+    if allowed(m.from_user.id) and settings.webapp_url.startswith("https://"):
+        await m.answer("Нажми, чтобы открыть 👇", reply_markup=app_kb())
 
 
 @router.message(F.text == BTN_TODAY)
