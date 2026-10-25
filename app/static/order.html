@@ -30,6 +30,14 @@
     .step button { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 18px; border: 0; background: var(--green2); color: var(--green); font-size: 22px; line-height: 1; cursor: pointer; }
     .step span { flex: 1; text-align: center; font-weight: 600; font-size: 13px; line-height: 1.15; }
     .step span.zero { color: var(--hint); font-weight: 400; }
+    .tabs { display: flex; gap: 8px; margin: 14px 0 0; }
+    .tabs button { flex: 1; border: 1.5px solid var(--line); background: var(--card); color: var(--text); border-radius: 12px; padding: 10px; font: inherit; font-weight: 600; cursor: pointer; }
+    .tabs button.on { border-color: var(--green); background: var(--green2); color: var(--green); }
+    .rev { background: var(--card); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+    .rev .head { display: flex; justify-content: space-between; gap: 8px; color: var(--hint); font-size: 14px; }
+    .rev .head b { color: var(--text); }
+    .rev .stars { color: #f5a623; letter-spacing: 1px; }
+    .rev p { margin: 6px 0 0; white-space: pre-line; }
     .days { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: none; }
     .days::-webkit-scrollbar { display: none; }
     .days button { flex: 0 0 auto; border: 1.5px solid var(--line); background: var(--card); color: var(--text); border-radius: 12px; padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; }
@@ -60,7 +68,13 @@
   <h1>🥔 Картошка и овощи<br>с доставкой на дом</h1>
   <p class="sub">Выберите товары и день — мы позвоним, чтобы подтвердить заказ.</p>
   <p class="sub phone" id="phone"></p>
+  <div class="tabs" id="tabs" hidden>
+    <button type="button" id="tab-order" class="on">🛒 Заказать</button>
+    <button type="button" id="tab-rev">⭐ Отзывы</button>
+  </div>
+  <div id="reviews" hidden></div>
 
+  <div id="orderpart">
   <h2>1. Что привезти</h2>
   <p class="sub note" id="note">🥔 Возим только вместе с картошкой. Лук, морковь, свёклу и мёд добавим к заказу.</p>
   <div class="tiles" id="products">Загрузка…</div>
@@ -83,6 +97,7 @@
   </div>
   <p class="sub">Оплата при получении: наличными или переводом.</p>
   <div class="err" id="err"></div>
+  </div>
 </main>
 <div class="bar"><div><div class="sum"><span class="sub">Итого</span><b id="total">0 ₽</b></div><button id="send" disabled>Заказать</button></div></div>
 
@@ -214,6 +229,27 @@ function showErr(text, focusId) {
   $("err").scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
+// вкладка «Отзывы» — только те, что Артур разрешил показывать кнопкой в боте
+async function loadReviews() {
+  let list = [];
+  try { list = await (await fetch("/api/public/reviews")).json(); } catch (_) { return; }
+  if (!list.length) return;
+  $("tab-rev").textContent = `⭐ Отзывы (${list.length})`;
+  $("reviews").replaceChildren(...list.map((r) => el("div", { class: "rev" },
+    el("div", { class: "head" }, el("span", {}, el("b", {}, r.name), " · ", el("span", { class: "stars" }, "★".repeat(r.rating))), el("span", {}, r.date)),
+    el("p", {}, r.text))));
+  const show = (rev) => {
+    $("tab-rev").classList.toggle("on", rev);
+    $("tab-order").classList.toggle("on", !rev);
+    $("reviews").hidden = !rev;
+    $("orderpart").hidden = rev;
+    document.querySelector(".bar").hidden = rev;
+  };
+  $("tab-rev").onclick = () => show(true);
+  $("tab-order").onclick = () => show(false);
+  $("tabs").hidden = false;
+}
+
 (async function init() {
   try {
     info = await (await fetch("/api/public/info")).json();
@@ -231,6 +267,7 @@ function showErr(text, focusId) {
   if (!info.products.length) $("products").textContent = "Сейчас нет товаров в продаже.";
   else renderProducts();
   renderDays();
+  loadReviews();
   $("send").addEventListener("click", send);
 })();
 </script>

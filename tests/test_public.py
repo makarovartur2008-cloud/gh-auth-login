@@ -181,3 +181,28 @@ def test_review_notifies_staff(monkeypatch):
     assert sent and sent[0][0] == 7
     text = sent[0][1]
     assert "⭐⭐⭐⭐ " in text and "&lt;b&gt;" in text and "5 кг моркови" in text
+
+
+def test_avito_review_and_public_tab(client, monkeypatch):
+    from app import bot as staff_bot
+    from app.config import settings
+    from app.db import Review
+
+    monkeypatch.setattr(settings, "avito_url", "https://www.avito.ru/user/abc/profile")
+    assert client.get("/api/public/review-info").json()["avito_url"].startswith("https://www.avito.ru/")
+    # оставил отзыв на Авито — текст здесь необязателен
+    assert client.post("/api/public/review", json={"name": "Оля", "phone": "89001112233", "avito": True}).status_code == 200
+    client.post("/api/public/review", json={"name": "Нина Петрова", "rating": 5, "text": "Крупная картошка"})
+    assert client.get("/api/public/reviews").json() == []  # пока Артур не разрешил — на сайте пусто
+
+    with SessionLocal() as s:
+        olya = s.query(Review).filter_by(name="Оля").one()
+        nina = s.query(Review).filter_by(name="Нина Петрова").one()
+        text, kb = staff_bot.review_message(olya)
+        assert "Авито" in text and kb is None  # без текста показывать нечего
+        text, kb = staff_bot.review_message(nina)
+        assert kb.inline_keyboard[0][0].callback_data == f"rv:{nina.id}:1"
+        nina.public = True
+        s.commit()
+    reviews = client.get("/api/public/reviews").json()
+    assert reviews == [{"name": "Нина", "rating": 5, "text": "Крупная картошка", "date": reviews[0]["date"]}]

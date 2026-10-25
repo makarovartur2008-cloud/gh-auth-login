@@ -23,7 +23,7 @@ from aiogram.types import (
 from app import ai, backup, client_bot, notify
 from app import services as sv
 from app.config import settings
-from app.db import Invite, Order, SessionLocal, User
+from app.db import Invite, Order, Review, SessionLocal, User
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -332,6 +332,38 @@ async def report_cb(c: CallbackQuery):
         r = sv.report(s, *sv.period(name))
     await c.message.edit_text(sv.report_text(r, REPORT_TITLES.get(name, "")), reply_markup=REPORT_KB)
     await c.answer()
+
+
+def review_message(r: Review) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Отзыв со страницы /otzyv: текст для бота и кнопка «показать на сайте» (вкладка «Отзывы»)."""
+    who = ", ".join(x for x in [sv.esc(r.name), sv.fmt_phone(r.phone) if r.phone else ""] if x)
+    head = f"{'⭐' * r.rating} <b>Новый отзыв</b>"
+    if r.avito:
+        head += "\n🟢 Говорит, что оставил(а) отзыв на Авито — проверь в профиле"
+    body = f"\n\n«{sv.esc(r.text)}»" if r.text else ""
+    text = (f"{head}\n{who}{body}\n\n🎁 За отзыв обещали {sv.esc(settings.review_gift)} к следующему заказу."
+            + ("\n👁 Показан на сайте во вкладке «Отзывы»." if r.public else ""))
+    if not r.text:
+        return text, None
+    btn = (InlineKeyboardButton(text="🙈 Убрать с сайта", callback_data=f"rv:{r.id}:0") if r.public
+           else InlineKeyboardButton(text="👁 Показать на сайте", callback_data=f"rv:{r.id}:1"))
+    return text, InlineKeyboardMarkup(inline_keyboard=[[btn]])
+
+
+@router.callback_query(F.data.startswith("rv:"))
+async def review_cb(c: CallbackQuery):
+    if not allowed(c.from_user.id):
+        return await c.answer()
+    _, rid, show = c.data.split(":")
+    with SessionLocal() as s:
+        r = s.get(Review, int(rid))
+        if not r:
+            return await c.answer("Отзыв не найден")
+        r.public = show == "1"
+        s.commit()
+        text, kb = review_message(r)
+    await c.message.edit_text(text, reply_markup=kb)
+    await c.answer("Показан на сайте" if show == "1" else "Убран с сайта")
 
 
 @router.callback_query(F.data.startswith("o:"))

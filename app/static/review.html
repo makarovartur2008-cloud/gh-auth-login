@@ -31,6 +31,11 @@
     .done .big { font-size: 64px; }
     a { color: var(--green); font-weight: 600; text-decoration: none; }
     .btn { display: inline-block; margin-top: 16px; background: var(--green); color: #fff; border-radius: 14px; padding: 14px 22px; }
+    .avito { background: var(--card); border-radius: 14px; padding: 14px; margin: 14px 0 6px; }
+    .avito h2 { font-size: 17px; margin: 0 0 6px; }
+    .avito .go { display: block; text-align: center; background: #00aaff; color: #fff; border-radius: 12px; padding: 14px; font-weight: 700; margin-top: 10px; }
+    .avito .hint { color: var(--hint); font-size: 13px; margin-top: 8px; }
+    h2.step2 { font-size: 17px; margin: 18px 0 0; }
   </style>
 </head>
 <body>
@@ -39,6 +44,13 @@
   <p class="sub">Расскажите, как вам картошка и доставка — это очень помогает.</p>
   <div class="gift" id="gift">🎁 За отзыв подарим <b>5 кг моркови</b> к следующему заказу</div>
 
+  <div class="avito" id="avito" hidden>
+    <h2>1. Оставьте отзыв на Авито</h2>
+    <div>Откроется наш профиль — нажмите «Оставить отзыв».</div>
+    <a class="go" id="avito-go" target="_blank" rel="noopener">⭐ Отзыв на Авито</a>
+    <div class="hint">Если Авито не даёт оставить отзыв — напишите нам там в чат пару слов, и кнопка появится.</div>
+  </div>
+  <h2 class="step2" id="step2" hidden>2. Напишите имя и телефон — чтобы мы знали, кому привезти подарок</h2>
   <div class="stars" id="stars"></div>
   <label for="text">Что понравилось или что сделать лучше</label>
   <textarea id="text" maxlength="1500" placeholder="Например: картошка крупная, привезли вовремя"></textarea>
@@ -54,7 +66,7 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let rating = 5, info = { gift: "5 кг моркови", phone: "" };
+let rating = 5, avitoClicked = false, info = { gift: "5 кг моркови", phone: "", avito_url: "" };
 
 function drawStars() {
   $("stars").replaceChildren(...[1, 2, 3, 4, 5].map((n) => {
@@ -70,7 +82,8 @@ function drawStars() {
 
 async function send() {
   $("err").textContent = "";
-  const body = { rating, text: $("text").value.trim(), name: $("name").value.trim(), phone: $("tel").value.trim(), website: $("website").value };
+  const body = { rating, text: $("text").value.trim(), name: $("name").value.trim(), phone: $("tel").value.trim(),
+    avito: avitoClicked, website: $("website").value };
   if (!body.name) { $("err").textContent = "⚠️ Укажите имя"; $("name").focus(); return; }
   $("send").disabled = true;
   try {
@@ -103,6 +116,14 @@ async function send() {
     } catch (_) {}
     info = await (await fetch("/api/public/review-info")).json();
     $("gift").replaceChildren("🎁 За отзыв подарим ", Object.assign(document.createElement("b"), { textContent: info.gift }), " к следующему заказу");
+    if (info.avito_url) {
+      // отзыв нужен прежде всего на Авито; форма ниже — чтобы знать, кому подарок (текст там необязателен)
+      $("avito").hidden = false;
+      $("step2").hidden = false;
+      $("avito-go").href = info.avito_url;
+      $("avito-go").addEventListener("click", () => { avitoClicked = true; });
+      $("text").placeholder = "Можно не писать, если уже оставили отзыв на Авито";
+    }
   } catch (_) {}
 })();
 $("send").addEventListener("click", send);

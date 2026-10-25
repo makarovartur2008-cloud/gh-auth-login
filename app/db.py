@@ -195,6 +195,8 @@ class Review(Base):
     phone: Mapped[str] = mapped_column(String(30), default="")
     rating: Mapped[int] = mapped_column(Integer, default=5)
     text: Mapped[str] = mapped_column(Text, default="")
+    avito: Mapped[bool] = mapped_column(Boolean, default=False)  # говорит, что оставил отзыв на Авито
+    public: Mapped[bool] = mapped_column(Boolean, default=False)  # показывать на сайте — решает Артур кнопкой в боте
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 

@@ -166,7 +166,16 @@ def review_page():
 @router.get("/api/public/review-info")
 def review_info():
     phone = sv.fmt_phone(settings.contact_phone) if settings.contact_phone else ""
-    return dict(gift=settings.review_gift, phone=phone)
+    avito = settings.avito_url if settings.avito_url.startswith("https://") else ""
+    return dict(gift=settings.review_gift, phone=phone, avito_url=avito)
+
+
+@router.get("/api/public/reviews")
+def public_reviews(s: Session = Depends(get_db)):
+    """Отзывы, которые Артур разрешил показывать (кнопка в боте). Только имя без фамилии и телефона."""
+    rows = s.query(Review).filter(Review.public).order_by(Review.created_at.desc()).limit(50)
+    return [dict(name=(r.name.split() or ["Покупатель"])[0], rating=r.rating, text=r.text,
+                 date=sv.fmt_date(r.created_at.date())) for r in rows]
 
 
 class PublicReview(BaseModel):
@@ -174,6 +183,7 @@ class PublicReview(BaseModel):
     phone: str = Field(default="", max_length=30)
     rating: int = Field(default=5, ge=1, le=5)
     text: str = Field(default="", max_length=1500)
+    avito: bool = False  # «оставил отзыв на Авито» — тогда текст здесь необязателен
     website: str = ""  # ловушка для ботов
 
 
@@ -181,11 +191,12 @@ class PublicReview(BaseModel):
 def post_review(body: PublicReview, request: Request, background: BackgroundTasks, s: Session = Depends(get_db)):
     if body.website:
         return {"ok": True}
-    if not body.text.strip() and body.rating >= 4:
+    if not body.text.strip() and body.rating >= 4 and not body.avito:
         raise HTTPException(400, "Напишите пару слов — что понравилось")
     if rate_limited(client_ip(request)):
         raise HTTPException(429, "Слишком много отзывов подряд. Попробуйте позже.")
-    r = Review(name=body.name.strip(), phone=body.phone.strip(), rating=body.rating, text=body.text.strip())
+    r = Review(name=body.name.strip(), phone=body.phone.strip(), rating=body.rating, text=body.text.strip(),
+               avito=body.avito)
     s.add(r)
     s.commit()
     background.add_task(notify_review, r.id)
@@ -199,13 +210,11 @@ async def notify_review(review_id: int):
         r = s.get(Review, review_id)
         if not r or staff_bot.BOT is None:
             return
-        who = ", ".join(x for x in [sv.esc(r.name), sv.fmt_phone(r.phone) if r.phone else ""] if x)
-        text = (f"{'⭐' * r.rating} <b>Новый отзыв</b>\n{who}\n\n«{sv.esc(r.text) or 'без текста'}»\n\n"
-                f"🎁 За отзыв обещали {sv.esc(settings.review_gift)} к следующему заказу.")
+        text, kb = staff_bot.review_message(r)
         ids = [u.tg_id for u in sv.all_users(s)]
     for tg_id in ids:
         try:
-            await staff_bot.BOT.send_message(tg_id, text)
+            await staff_bot.BOT.send_message(tg_id, text, reply_markup=kb)
         except Exception:
             log.exception("review notify %s failed", tg_id)
 
