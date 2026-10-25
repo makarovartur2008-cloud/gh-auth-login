@@ -10,7 +10,7 @@ fi
 
 if [ ! -f .env ]; then
   read -rp "Токен бота от @BotFather: " BOT_TOKEN
-  read -rp "Ключ ИИ (ProxyAPI): " AI_API_KEY
+  read -rp "Ключ ИИ (ProxyAPI; Enter — добавить позже командой bash set_ai_key.sh): " AI_API_KEY
   read -rp "Телефон для листовок [89083003917]: " CONTACT_PHONE
   CONTACT_PHONE="${CONTACT_PHONE:-89083003917}"
   read -rp "Город для поиска адресов [Самара]: " CITY
@@ -28,6 +28,13 @@ if [ ! -f .env ]; then
       -e "s|^WEBAPP_URL=.*|WEBAPP_URL=https://${DOMAIN}|" \
       .env.example > .env
   echo "Адрес приложения: https://${DOMAIN}"
+  # какие модели есть у ИИ-сервиса — выбираем самые дешёвые для текста и голоса
+  if [ -n "${AI_API_KEY}" ]; then
+    BASE=$(grep -E '^AI_BASE_URL=' .env | cut -d= -f2-)
+    python3 scripts/pick_models.py "$BASE" "$AI_API_KEY" | while IFS='=' read -r k v; do
+      sed -i "s|^${k}=.*|${k}=${v}|" .env
+    done
+  fi
 fi
 
 mkdir -p data
