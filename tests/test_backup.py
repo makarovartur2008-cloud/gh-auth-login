@@ -25,3 +25,14 @@ def test_backup_goes_to_owner_only(s):
     _, head, caption = bot.sent[0]
     assert head.startswith(b"SQLite format 3")
     assert "клиентов 1" in caption
+
+
+def test_app_opens_via_inline_button(monkeypatch):
+    """С кнопки нижней клавиатуры Telegram не передаёт initData — приложение открываем inline-кнопкой."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "webapp_url", "https://example.org/")
+    kb = staff_bot.main_kb()
+    app_btn = kb.keyboard[-1][0]
+    assert app_btn.text == staff_bot.BTN_APP and app_btn.web_app is None
+    assert staff_bot.app_kb().inline_keyboard[0][0].web_app.url == "https://example.org/"

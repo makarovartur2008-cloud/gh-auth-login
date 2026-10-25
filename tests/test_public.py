@@ -26,25 +26,25 @@ def body(**kw):
     p = ids()
     d = dict(name="Нина", phone="8 900 111-22-33", address="Ленина 5", entrance="2", floor="3",
              date=(sv.today() + timedelta(days=1)).isoformat(), source="Ленина 5",
-             items=[{"product_id": p["Картошка белая"], "qty": 50}, {"product_id": p["Морковь"], "qty": 3}])
+             items=[{"product_id": p["Картошка белая"], "qty": 50}, {"product_id": p["Морковь"], "qty": 5}])
     d.update(kw)
     return d
 
 
 def test_info_hides_products_without_price(client):
     with SessionLocal() as s:
-        s.query(Product).filter_by(name="Лук").one().price = 0
+        s.query(Product).filter_by(name="Лук круглый").one().price = 0
         s.commit()
     info = client.get("/api/public/info").json()
     names = [p["name"] for p in info["products"]]
-    assert "Картошка белая" in names and "Лук" not in names
+    assert "Картошка белая" in names and "Лук круглый" not in names and "Лук плоский" in names
     assert len(info["days"]) == public.DAYS_AHEAD
 
 
 def test_order_created_with_source(client):
     r = client.post("/api/public/order", json=body())
     assert r.status_code == 200, r.text
-    assert r.json()["total"] == 50 * 45 + 3 * 40
+    assert r.json()["total"] == 50 * 45 + 5 * 40
     with SessionLocal() as s:
         o = s.scalar(sv.order_query())
         assert o.source == "Ленина 5" and o.status == "new" and not o.via_friend
@@ -56,8 +56,14 @@ def test_validation(client):
     p = ids()
     assert client.post("/api/public/order", json=body(phone="123")).status_code == 400
     assert client.post("/api/public/order", json=body(date="2001-01-01")).status_code == 400
-    small = body(items=[{"product_id": p["Картошка белая"], "qty": 25}])
-    assert "от 50" in client.post("/api/public/order", json=small).json()["detail"]
+    small = body(items=[{"product_id": p["Картошка белая"], "qty": 20}])
+    assert "от 25" in client.post("/api/public/order", json=small).json()["detail"]
+    carrot = body(items=[{"product_id": p["Картошка белая"], "qty": 25}, {"product_id": p["Морковь"], "qty": 3}])
+    assert "от 5" in client.post("/api/public/order", json=carrot).json()["detail"]
+    washed = body(items=[{"product_id": p["Картошка белая"], "qty": 25}, {"product_id": p["Морковь мытая"], "qty": 10}])
+    assert "от 20" in client.post("/api/public/order", json=washed).json()["detail"]
+    no_potato = body(items=[{"product_id": p["Морковь"], "qty": 10}])
+    assert "от 1 сетки (25 кг)" in client.post("/api/public/order", json=no_potato).json()["detail"]
     with SessionLocal() as s:
         assert s.query(Order).count() == 0
 
@@ -115,3 +121,88 @@ def test_order_without_potato_rejected(client):
     with SessionLocal() as s:
         assert s.query(Order).count() == 0
     assert all("potato" in x for x in client.get("/api/public/info").json()["products"])
+
+
+def test_one_sack_of_potato_is_enough(client):
+    p = ids()
+    r = client.post("/api/public/order", json=body(items=[{"product_id": p["Картошка красная"], "qty": 25}]))
+    assert r.status_code == 200, r.text
+
+
+def test_flyer_shows_new_minimums(client):
+    html = client.get("/flyer").text
+    assert "Картошка от 1 сетки (25 кг)" in html and "от 20 кг" in html and "50 кг" not in html
+    assert "1 125 ₽/сетка" in html
+
+
+def test_review_saved_and_page_served(client):
+    from app.db import Review
+
+    assert "Отправить отзыв" in client.get("/otzyv").text
+    assert client.get("/api/public/review-info").json()["gift"] == "5 кг моркови"
+    r = client.post("/api/public/review", json={"name": "Нина", "phone": "89001112233", "rating": 5,
+                                                 "text": "Картошка крупная, привезли вовремя"})
+    assert r.status_code == 200 and r.json()["gift"] == "5 кг моркови"
+    # пятёрка без текста — просим пару слов; ловушка для ботов ничего не пишет
+    assert client.post("/api/public/review", json={"name": "Б", "rating": 5}).status_code == 400
+    assert client.post("/api/public/review", json={"name": "Бот", "text": "x", "website": "spam"}).json()["ok"]
+    with SessionLocal() as s:
+        assert [(x.name, x.rating) for x in s.query(Review)] == [("Нина", 5)]
+
+
+def test_review_url_redirects(client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "review_url", "https://yandex.ru/maps/org/123/reviews/")
+    r = client.get("/otzyv", follow_redirects=False)
+    assert r.status_code in (302, 307) and r.headers["location"].startswith("https://yandex.ru/maps")
+
+
+def test_review_notifies_staff(monkeypatch):
+    import asyncio
+
+    from app import bot as staff_bot
+    from app.db import Review, User
+
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, **kw):
+            sent.append((chat_id, text))
+
+    monkeypatch.setattr(staff_bot, "BOT", FakeBot())
+    with SessionLocal() as s:
+        s.add(User(tg_id=7, name="Артур", role="owner"))
+        r = Review(name="Нина <b>", phone="89001112233", rating=4, text="Хорошо")
+        s.add(r)
+        s.commit()
+        rid = r.id
+    asyncio.run(public.notify_review(rid))
+    assert sent and sent[0][0] == 7
+    text = sent[0][1]
+    assert "⭐⭐⭐⭐ " in text and "&lt;b&gt;" in text and "5 кг моркови" in text
+
+
+def test_avito_review_and_public_tab(client, monkeypatch):
+    from app import bot as staff_bot
+    from app.config import settings
+    from app.db import Review
+
+    monkeypatch.setattr(settings, "avito_url", "https://www.avito.ru/user/abc/profile")
+    assert client.get("/api/public/review-info").json()["avito_url"].startswith("https://www.avito.ru/")
+    # оставил отзыв на Авито — текст здесь необязателен
+    assert client.post("/api/public/review", json={"name": "Оля", "phone": "89001112233", "avito": True}).status_code == 200
+    client.post("/api/public/review", json={"name": "Нина Петрова", "rating": 5, "text": "Крупная картошка"})
+    assert client.get("/api/public/reviews").json() == []  # пока Артур не разрешил — на сайте пусто
+
+    with SessionLocal() as s:
+        olya = s.query(Review).filter_by(name="Оля").one()
+        nina = s.query(Review).filter_by(name="Нина Петрова").one()
+        text, kb = staff_bot.review_message(olya)
+        assert "Авито" in text and kb is None  # без текста показывать нечего
+        text, kb = staff_bot.review_message(nina)
+        assert kb.inline_keyboard[0][0].callback_data == f"rv:{nina.id}:1"
+        nina.public = True
+        s.commit()
+    reviews = client.get("/api/public/reviews").json()
+    assert reviews == [{"name": "Нина", "rating": 5, "text": "Крупная картошка", "date": reviews[0]["date"]}]

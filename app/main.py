@@ -48,6 +48,9 @@ async def lifespan(_: FastAPI):
         from app.bot import send_backup
 
         scheduler.add_job(send_backup, "cron", hour=settings.backup_hour, minute=30, args=[bot])
+        from app.bot import set_menu_button
+
+        await set_menu_button(bot)
         try:
             notify.TG_BOT_USERNAME = (await bot.get_me()).username or ""
         except Exception:

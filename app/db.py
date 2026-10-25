@@ -51,6 +51,7 @@ class Product(Base):
     emoji: Mapped[str] = mapped_column(String(8), default="")
     sort: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    photo: Mapped[str] = mapped_column(String(80), default="")  # файл в папке photos рядом с базой
 
 
 class Client(Base):
@@ -186,15 +187,30 @@ class Expense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class Review(Base):
+    """Отзыв со страницы /otzyv (QR на обороте визитки). За отзыв — подарок к следующему заказу."""
+    __tablename__ = "reviews"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    phone: Mapped[str] = mapped_column(String(30), default="")
+    rating: Mapped[int] = mapped_column(Integer, default=5)
+    text: Mapped[str] = mapped_column(Text, default="")
+    avito: Mapped[bool] = mapped_column(Boolean, default=False)  # говорит, что оставил отзыв на Авито
+    public: Mapped[bool] = mapped_column(Boolean, default=False)  # показывать на сайте — решает Артур кнопкой в боте
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 # Начальный прайс. Меняется в приложении во вкладке «Цены». Мёд свой — закупка 0.
 DEFAULT_PRODUCTS = [
-    dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
-    dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=50, emoji="🥔"),
-    dict(name="Лук", unit="кг", price=40, cost=20, emoji="🧅"),
-    dict(name="Лук красный", unit="кг", price=80, cost=20, emoji="🧅"),
-    dict(name="Морковь", unit="кг", price=40, cost=25, emoji="🥕"),
-    dict(name="Морковь мытая", unit="кг", price=70, cost=45, emoji="🥕"),
-    dict(name="Свёкла", unit="кг", price=40, cost=22, emoji="🟣"),
+    dict(name="Картошка белая", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
+    dict(name="Картошка красная", unit="кг", price=45, cost=20, min_qty=25, emoji="🥔"),
+    dict(name="Лук круглый", unit="кг", price=40, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Лук плоский", unit="кг", price=40, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Лук красный", unit="кг", price=80, cost=20, min_qty=5, emoji="🧅"),
+    dict(name="Морковь", unit="кг", price=40, cost=25, min_qty=5, emoji="🥕"),
+    # мытую берём только мешками — продаём от 20 кг
+    dict(name="Морковь мытая", unit="кг", price=70, cost=45, min_qty=20, emoji="🥕"),
+    dict(name="Свёкла", unit="кг", price=40, cost=22, min_qty=5, emoji="🟣"),
     dict(name="Мёд липовый 1 л", unit="шт", price=700, cost=0, emoji="🍯"),
     dict(name="Мёд липовый 3 л", unit="шт", price=2000, cost=0, emoji="🍯"),
 ]
@@ -227,7 +243,14 @@ NEW_COLUMNS = [
     ("clients", "geo_address", "VARCHAR(250) DEFAULT '' NOT NULL"),
     ("clients", "tg_chat_id", "INTEGER"),
     ("clients", "max_chat_id", "VARCHAR(40) DEFAULT '' NOT NULL"),
+    ("products", "photo", "VARCHAR(80) DEFAULT '' NOT NULL"),
 ]
+
+
+# Минимумы в заказе: картошка от 1 сетки (было 2), овощи от 5 кг, мытая морковь от 20 кг.
+# (товар, старое значение, новое) — меняем только нетронутые старые значения
+MIN_QTY_V1 = [("Картошка белая", 50, 25), ("Картошка красная", 50, 25), ("Лук", 0, 5), ("Лук красный", 0, 5),
+              ("Морковь", 0, 5), ("Морковь мытая", 0, 20), ("Свёкла", 0, 5)]
 
 
 def migrate(engine):
@@ -240,6 +263,22 @@ def migrate(engine):
         # старым заказам — свои токены
         for (oid,) in conn.exec_driver_sql("SELECT id FROM orders WHERE token = ''").fetchall():
             conn.exec_driver_sql("UPDATE orders SET token = ? WHERE id = ?", (secrets.token_urlsafe(12), oid))
+        # правки данных — по одному разу на базу (номер хранится в самом файле SQLite)
+        if conn.exec_driver_sql("PRAGMA user_version").scalar() < 1:
+            for name, old, new in MIN_QTY_V1:
+                conn.exec_driver_sql("UPDATE products SET min_qty = ? WHERE name = ? AND min_qty = ?", (new, name, old))
+            conn.exec_driver_sql("PRAGMA user_version = 1")
+        # лук бывает круглый и плоский: «Лук» → «Лук круглый», рядом добавляем плоский
+        if conn.exec_driver_sql("PRAGMA user_version").scalar() < 2:
+            row = conn.exec_driver_sql("SELECT sort FROM products WHERE name = 'Лук'").fetchone()
+            if row:
+                conn.exec_driver_sql("UPDATE products SET name = 'Лук круглый' WHERE name = 'Лук'")
+                if not conn.exec_driver_sql("SELECT 1 FROM products WHERE name = 'Лук плоский'").fetchone():
+                    conn.exec_driver_sql("UPDATE products SET sort = sort + 1 WHERE sort > ?", (row[0],))
+                    conn.exec_driver_sql(
+                        "INSERT INTO products (name, unit, price, cost, min_qty, emoji, sort, active, photo) "
+                        "VALUES ('Лук плоский', 'кг', 40, 20, 5, '🧅', ?, 1, '')", (row[0] + 1,))
+            conn.exec_driver_sql("PRAGMA user_version = 2")
 
 
 def init_db(engine) -> sessionmaker:

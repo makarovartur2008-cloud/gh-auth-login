@@ -316,8 +316,8 @@ async function orderForm(order, preset = {}) {
       }),
       h("div", { class: "row", style: "gap:6px;flex-wrap:wrap" },
         h("button", { class: "small", onclick: () => { const p = products[0]; items.push({ product_id: p.id, qty: p.min_qty || 1, price: p.price }); drawItems(); } }, "＋ товар"),
-        h("button", { class: "small", onclick: () => { const p = products.find((x) => x.min_qty) || products[0]; items.push({ product_id: p.id, qty: state.me.sack_kg * 2, price: p.price }); drawItems(); } },
-          `＋ 2 сетки картошки (${state.me.sack_kg * 2} кг)`)),
+        h("button", { class: "small", onclick: () => { const p = products.find((x) => /картош/i.test(x.name)) || products[0]; items.push({ product_id: p.id, qty: state.me.sack_kg, price: p.price }); drawItems(); } },
+          `＋ сетка картошки (${state.me.sack_kg} кг)`)),
       totalEl);
     drawTotal();
   }
@@ -325,7 +325,7 @@ async function orderForm(order, preset = {}) {
   function drawTotal() {
     const t = items.reduce((a, i) => a + (i.qty || 0) * (i.price || 0), 0);
     const prod = (i) => products.find((x) => x.id === i.product_id);
-    const warn = items.some((i) => prod(i)?.min_qty && i.qty < prod(i).min_qty) ? " (⚠️ картошка от 50 кг)"
+    const warn = items.some((i) => prod(i)?.min_qty && i.qty < prod(i).min_qty) ? " (⚠️ меньше минимума)"
       : !items.some((i) => i.qty > 0 && /картош/i.test(prod(i)?.name || "")) ? " (⚠️ без картошки не возим)" : "";
     fill(totalEl, h("span", {}, "Итого", warn ? h("span", { class: "hint" }, warn) : ""), h("span", {}, money(t)));
   }
@@ -544,6 +544,7 @@ async function renderPrices() {
         h("button", { onclick: async () => { try { await navigator.clipboard.writeText(orderUrl); toast("Ссылка скопирована"); } catch (_) { toast(orderUrl); } } }, "📋 Ссылка для Авито"))),
     h("p", { class: "hint" }, "Цена — за сколько продаёшь, закупка — за сколько берёшь (для расчёта прибыли). Нажми на товар, чтобы изменить."),
     h("div", { class: "card" }, state.products.map((p) => h("div", { class: "list-item", onclick: () => productForm(p), style: p.active ? "" : "opacity:.5" },
+      p.photo ? h("img", { src: p.photo, alt: "", style: "width:44px;height:44px;border-radius:10px;object-fit:cover;flex:0 0 44px" }) : "",
       h("div", { class: "grow" }, h("div", { class: "name" }, `${p.emoji} ${p.name}`),
         h("div", { class: "hint" }, `закупка ${qty(p.cost)} ₽` + (p.min_qty ? ` · от ${qty(p.min_qty)} ${p.unit}` : "") + (p.active ? "" : " · скрыт"))),
       h("b", { style: p.price ? "" : "color:var(--red)" }, p.price ? `${qty(p.price)} ₽/${p.unit}` : "цена?")))));
@@ -567,12 +568,66 @@ function productForm(p = null) {
     h("div", { class: "grid2" }, h("div", {}, h("label", {}, "Цена продажи, ₽"), f.price), h("div", {}, h("label", {}, "Закупка, ₽"), f.cost)),
     h("div", { class: "grid2" }, h("div", {}, h("label", {}, "Единица"), f.unit), h("div", {}, h("label", {}, "Минимум в заказе"), f.min_qty)),
     h("label", { class: "check" }, active, " Есть в продаже"),
+    p ? photoBlock(p) : h("p", { class: "hint" }, "Фото можно добавить после сохранения товара."),
     h("button", { class: "primary wide", onclick: async () => {
       const body = { name: f.name.value, unit: f.unit.value, emoji: f.emoji.value, price: +f.price.value || 0,
         cost: +f.cost.value || 0, min_qty: +f.min_qty.value || 0, active: active.checked };
       await api(p ? `/products/${p.id}` : "/products", { method: p ? "PUT" : "POST", body });
-      toast("Сохранено"); closeSheet(); renderPrices();
+      toast("Сохранено"); closeSheet(); render();
     } }, "💾 Сохранить"));
+}
+
+// фото товара — его видят клиенты на странице заказа
+function photoBlock(p) {
+  const box = h("div", { class: "card", style: "display:flex;gap:12px;align-items:center" });
+  const input = h("input", { type: "file", accept: "image/*", style: "display:none" });
+  const draw = () => fill(box,
+    p.photo ? h("img", { src: p.photo, alt: "", style: "width:84px;height:84px;border-radius:12px;object-fit:cover" })
+      : h("div", { style: "width:84px;height:84px;border-radius:12px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:40px" }, p.emoji || "📷"),
+    h("div", { class: "grow" },
+      h("div", { class: "hint", style: "margin-bottom:6px" }, "Фото на странице заказа"),
+      h("div", { class: "actions" },
+        h("button", { onclick: () => input.click() }, p.photo ? "📷 Заменить" : "📷 Добавить фото"),
+        p.photo ? h("button", { onclick: async () => { await save(() => api(`/products/${p.id}/photo`, { method: "DELETE" })); } }, "Убрать") : "")),
+    input);
+  const save = async (call) => {
+    const out = await call();
+    p.photo = out.photo;
+    state.products = state.products.map((x) => (x.id === p.id ? out : x));
+    draw();
+    render();
+  };
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    toast("Загружаю фото…");
+    try {
+      const data = await shrinkPhoto(file, 1000);
+      await save(() => api(`/products/${p.id}/photo`, { method: "POST", body: { data } }));
+      toast("Фото сохранено");
+    } catch (e) { if (!/Ошибка|⚠️/.test(e.message)) toast("⚠️ Не получилось загрузить фото"); }
+    input.value = "";
+  };
+  draw();
+  return box;
+}
+
+// ужимаем на телефоне до ~1000 px: быстрее грузится у клиентов и не забивает сервер
+function shrinkPhoto(file, max) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k);
+      c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => reject(new Error("не картинка"));
+    img.src = URL.createObjectURL(file);
+  });
 }
 
 // ---------- старт ----------
@@ -581,7 +636,10 @@ function productForm(p = null) {
   try {
     state.me = await api("/me");
   } catch (e) {
-    fill(view(), h("div", { class: "empty" }, "⛔ ", e.message));
+    const hint = tg && !tg.initData
+      ? "Открой приложение кнопкой «Приложение» слева от поля ввода в боте или командой /app."
+      : e.message;
+    fill(view(), h("div", { class: "empty" }, "⛔ ", hint));
     return;
   }
   state.today = state.me.today;

@@ -7,7 +7,7 @@ from app.db import Client, Expense, Order, Product
 
 def test_apply_order_expense_and_recurring(s):
     potato = s.query(Product).filter_by(name="Картошка красная").one()
-    onion = s.query(Product).filter_by(name="Лук").one()
+    onion = s.query(Product).filter_by(name="Лук круглый").one()
     t = sv.today()
     raw = json.dumps({"actions": [
         {"type": "order", "client": {"id": None, "name": "Марина", "phone": "89001234567", "address": "Ленина 5",

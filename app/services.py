@@ -67,6 +67,14 @@ def is_potato(p: Product) -> bool:
     return "картош" in p.name.lower()
 
 
+def potato_min_text(items: list[Product]) -> str:
+    """«от 1 сетки (25 кг)» — по самому маленькому минимуму среди картошки."""
+    kg = min((p.min_qty or settings.sack_kg for p in items if is_potato(p)), default=settings.sack_kg)
+    sacks = kg / settings.sack_kg
+    word = "сеток" if sacks == int(sacks) and sacks >= 2 else "сетки"
+    return f"от {fmt_qty(sacks)} {word} ({fmt_qty(kg)} кг)"
+
+
 def products(s: Session, only_active: bool = True) -> list[Product]:
     q = select(Product).order_by(Product.sort, Product.id)
     if only_active:
@@ -394,7 +402,7 @@ SLOT_NAMES = {"": "днём", "evening": "вечером"}
 BONUSES = {
     "carrot": ("Морковь", "моркови"),
     "beet": ("Свёкла", "свёклы"),
-    "onion": ("Лук", "лука"),
+    "onion": ("Лук круглый", "лука"),
 }
 BONUS_EMOJI = {"carrot": "🥕", "beet": "🟣", "onion": "🧅"}
 

@@ -16,15 +16,28 @@
     h2 { font-size: 18px; margin: 22px 0 8px; }
     .sub { color: var(--hint); margin: 0 0 8px; }
     .card { background: var(--card); border-radius: 14px; padding: 12px 14px; margin: 8px 0; }
-    .prod { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-    .prod:last-child { border-bottom: 0; }
-    .prod .info { flex: 1; min-width: 0; }
-    .prod .name { font-weight: 600; }
-    .prod .price { color: var(--hint); font-size: 14px; }
-    .step { display: flex; align-items: center; gap: 4px; }
-    .step button { width: 38px; height: 38px; border-radius: 19px; border: 0; background: var(--green2); color: var(--green); font-size: 22px; line-height: 1; cursor: pointer; }
-    .step span { min-width: 64px; text-align: center; font-weight: 600; font-size: 15px; }
+    /* товары — плитки с фото, по две в ряд */
+    .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+    .tile { background: var(--card); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; border: 2px solid transparent; }
+    .tile.on { border-color: var(--green); }
+    .tile .pic { aspect-ratio: 1 / 1; background: var(--green2); display: flex; align-items: center; justify-content: center; font-size: 64px; }
+    .tile .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .tile .body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 2px; flex: 1; }
+    .tile .name { font-weight: 600; line-height: 1.2; }
+    .tile .price { color: var(--text); font-weight: 600; font-size: 15px; }
+    .tile .more { color: var(--hint); font-size: 13px; line-height: 1.25; }
+    .step { display: flex; align-items: center; gap: 4px; margin-top: auto; padding-top: 8px; }
+    .step button { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 18px; border: 0; background: var(--green2); color: var(--green); font-size: 22px; line-height: 1; cursor: pointer; }
+    .step span { flex: 1; text-align: center; font-weight: 600; font-size: 13px; line-height: 1.15; }
     .step span.zero { color: var(--hint); font-weight: 400; }
+    .tabs { display: flex; gap: 8px; margin: 14px 0 0; }
+    .tabs button { flex: 1; border: 1.5px solid var(--line); background: var(--card); color: var(--text); border-radius: 12px; padding: 10px; font: inherit; font-weight: 600; cursor: pointer; }
+    .tabs button.on { border-color: var(--green); background: var(--green2); color: var(--green); }
+    .rev { background: var(--card); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+    .rev .head { display: flex; justify-content: space-between; gap: 8px; color: var(--hint); font-size: 14px; }
+    .rev .head b { color: var(--text); }
+    .rev .stars { color: #f5a623; letter-spacing: 1px; }
+    .rev p { margin: 6px 0 0; white-space: pre-line; }
     .days { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 6px; scrollbar-width: none; }
     .days::-webkit-scrollbar { display: none; }
     .days button { flex: 0 0 auto; border: 1.5px solid var(--line); background: var(--card); color: var(--text); border-radius: 12px; padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; }
@@ -55,10 +68,16 @@
   <h1>🥔 Картошка и овощи<br>с доставкой на дом</h1>
   <p class="sub">Выберите товары и день — мы позвоним, чтобы подтвердить заказ.</p>
   <p class="sub phone" id="phone"></p>
+  <div class="tabs" id="tabs" hidden>
+    <button type="button" id="tab-order" class="on">🛒 Заказать</button>
+    <button type="button" id="tab-rev">⭐ Отзывы</button>
+  </div>
+  <div id="reviews" hidden></div>
 
+  <div id="orderpart">
   <h2>1. Что привезти</h2>
-  <p class="sub note">🥔 Возим только вместе с картошкой: от 2 сеток (50 кг). Лук, морковь, свёклу и мёд добавим к заказу.</p>
-  <div class="card" id="products">Загрузка…</div>
+  <p class="sub note" id="note">🥔 Возим только вместе с картошкой. Лук, морковь, свёклу и мёд добавим к заказу.</p>
+  <div class="tiles" id="products">Загрузка…</div>
 
   <h2>2. Когда привезти</h2>
   <div class="days" id="days"></div>
@@ -78,6 +97,7 @@
   </div>
   <p class="sub">Оплата при получении: наличными или переводом.</p>
   <div class="err" id="err"></div>
+  </div>
 </main>
 <div class="bar"><div><div class="sum"><span class="sub">Итого</span><b id="total">0 ₽</b></div><button id="send" disabled>Заказать</button></div></div>
 
@@ -97,12 +117,18 @@ function plural(n, one, few, many) {
   return b === 1 ? one : b >= 2 && b <= 4 ? few : many;
 }
 
-// шаг и минимум: картошка — сетками, мёд — банками, остальное — по 1 кг
-function stepOf(p) { return p.min_qty ? info.sack_kg : 1; }
+// шаг и минимум: картошка — сетками, мёд — банками, остальное — по 1 кг от минимума товара
+function stepOf(p) { return p.potato ? info.sack_kg : 1; }
 function minOf(p) { return p.min_qty || stepOf(p); }
+// «от 1 сетки (25 кг)» — как на сервере (services.potato_min_text)
+function potatoMin() {
+  const kg = Math.min(...info.products.filter((p) => p.potato).map(minOf), Infinity);
+  const k = Number.isFinite(kg) ? kg : info.sack_kg, n = k / info.sack_kg;
+  return `от ${fmt(n)} ${Number.isInteger(n) && n >= 2 ? "сеток" : "сетки"} (${fmt(k)} кг)`;
+}
 function label(p, q) {
   if (!q) return "—";
-  if (p.min_qty) return `${fmt(q / info.sack_kg)} ${plural(q / info.sack_kg, "сетка", "сетки", "сеток")} · ${fmt(q)} кг`;
+  if (p.potato) return `${fmt(q / info.sack_kg)} ${plural(q / info.sack_kg, "сетка", "сетки", "сеток")} · ${fmt(q)} кг`;
   return p.unit === "кг" ? `${fmt(q)} кг` : `${fmt(q)} шт`;
 }
 
@@ -125,13 +151,23 @@ function renderProducts() {
       qty[p.id] = next;
       renderProducts();
     };
-    return el("div", { class: "prod" },
-      el("div", { class: "info" }, el("div", { class: "name" }, `${p.emoji} ${p.name}`),
-        el("div", { class: "price" }, `${fmt(p.price)} ₽/${unit}` + (p.min_qty ? ` · от ${fmt(p.min_qty)} кг (сетка ${info.sack_kg} кг)` : ""))),
-      el("div", { class: "step" },
-        el("button", { type: "button", "aria-label": "меньше", onclick: () => change(-1) }, "−"),
-        el("span", { class: q ? "" : "zero" }, label(p, q)),
-        el("button", { type: "button", "aria-label": "больше", onclick: () => change(1) }, "+")));
+    // картошка — цена за сетку крупно, за кг мелко; остальное — за кг и минимум
+    const price = p.potato ? `${money(p.price * info.sack_kg)} за сетку` : `${fmt(p.price)} ₽/${unit}`;
+    const more = p.potato
+      ? `${info.sack_kg} кг · ${fmt(p.price)} ₽/кг` + (minOf(p) > info.sack_kg ? ` · ${potatoMin()}` : "")
+      : p.min_qty ? `от ${fmt(p.min_qty)} ${unit === "кг" ? "кг" : "шт"}` : "";
+    const pic = p.photo
+      ? el("div", { class: "pic" }, el("img", { src: p.photo, alt: p.name, loading: "lazy" }))
+      : el("div", { class: "pic" }, p.emoji || "🥬");
+    return el("div", { class: "tile" + (q ? " on" : "") }, pic,
+      el("div", { class: "body" },
+        el("div", { class: "name" }, p.name),
+        el("div", { class: "price" }, price),
+        more ? el("div", { class: "more" }, more) : "",
+        el("div", { class: "step" },
+          el("button", { type: "button", "aria-label": "меньше", onclick: () => change(-1) }, "−"),
+          el("span", { class: q ? "" : "zero" }, label(p, q)),
+          el("button", { type: "button", "aria-label": "больше", onclick: () => change(1) }, "+"))));
   }));
   const total = info.products.reduce((a, p) => a + (qty[p.id] || 0) * p.price, 0);
   $("total").textContent = money(total);
@@ -153,7 +189,7 @@ async function send() {
     comment: $("comment").value.trim(), website: $("website").value, date: day, source,
     items: Object.entries(qty).filter(([, q]) => q > 0).map(([id, q]) => ({ product_id: +id, qty: q })),
   };
-  if (!hasPotato()) return showErr("Добавьте картошку — от 2 сеток (50 кг), остальное привезём вместе с ней");
+  if (!hasPotato()) return showErr(`Добавьте картошку — ${potatoMin()}, остальное привезём вместе с ней`);
   if (!body.name) return showErr("Укажите имя", "name");
   if (body.phone.replace(/\D/g, "").length < 10) return showErr("Укажите телефон, чтобы мы могли позвонить", "tel");
   if (body.address.length < 3) return showErr("Укажите адрес", "address");
@@ -193,6 +229,27 @@ function showErr(text, focusId) {
   $("err").scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
+// вкладка «Отзывы» — только те, что Артур разрешил показывать кнопкой в боте
+async function loadReviews() {
+  let list = [];
+  try { list = await (await fetch("/api/public/reviews")).json(); } catch (_) { return; }
+  if (!list.length) return;
+  $("tab-rev").textContent = `⭐ Отзывы (${list.length})`;
+  $("reviews").replaceChildren(...list.map((r) => el("div", { class: "rev" },
+    el("div", { class: "head" }, el("span", {}, el("b", {}, r.name), " · ", el("span", { class: "stars" }, "★".repeat(r.rating))), el("span", {}, r.date)),
+    el("p", {}, r.text))));
+  const show = (rev) => {
+    $("tab-rev").classList.toggle("on", rev);
+    $("tab-order").classList.toggle("on", !rev);
+    $("reviews").hidden = !rev;
+    $("orderpart").hidden = rev;
+    document.querySelector(".bar").hidden = rev;
+  };
+  $("tab-rev").onclick = () => show(true);
+  $("tab-order").onclick = () => show(false);
+  $("tabs").hidden = false;
+}
+
 (async function init() {
   try {
     info = await (await fetch("/api/public/info")).json();
@@ -201,6 +258,7 @@ function showErr(text, focusId) {
     return;
   }
   day = info.days[1]?.date || info.days[0].date; // по умолчанию — завтра
+  $("note").textContent = `🥔 Возим только вместе с картошкой: ${potatoMin()}. Лук, морковь, свёклу и мёд добавим к заказу.`;
   if (info.phone) $("phone").replaceChildren("Или звоните: ", el("a", { href: "tel:" + info.phone.replace(/[^\d+]/g, "") }, info.phone));
   try {
     const saved = JSON.parse(localStorage.getItem("kartoshka-client") || "null");
@@ -209,6 +267,7 @@ function showErr(text, focusId) {
   if (!info.products.length) $("products").textContent = "Сейчас нет товаров в продаже.";
   else renderProducts();
   renderDays();
+  loadReviews();
   $("send").addEventListener("click", send);
 })();
 </script>

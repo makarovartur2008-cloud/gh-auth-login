@@ -1,5 +1,6 @@
 """Публичная часть: страница заказа по QR-коду и листовка для печати. Вход без Telegram."""
 
+import logging
 import time
 from datetime import date, timedelta
 from html import escape
@@ -8,17 +9,18 @@ from urllib.parse import quote
 
 import segno
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app import notify
+from app import notify, photos
 from app import services as sv
 from app.api import get_db
 from app.config import settings
-from app.db import Order, Product, SessionLocal
+from app.db import Order, Product, Review, SessionLocal
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 
 # Защита от спама: не больше LIMIT заявок с одного адреса за WINDOW секунд
@@ -67,7 +69,7 @@ def info(s: Session = Depends(get_db)):
         days=[dict(date=(t + timedelta(days=i)).isoformat(), label=sv.fmt_date(t + timedelta(days=i)))
               for i in range(DAYS_AHEAD)],
         products=[dict(id=p.id, name=p.name, unit=p.unit, price=p.price, min_qty=p.min_qty, emoji=p.emoji,
-                       potato=sv.is_potato(p))
+                       potato=sv.is_potato(p), photo=photos.url(p.photo))
                   for p in public_products(s)],
     )
 
@@ -115,7 +117,7 @@ async def create_public_order(body: PublicOrder, request: Request, background: B
             raise HTTPException(400, f"{p.name} — от {sv.fmt_qty(p.min_qty)} {p.unit}")
         items.append({"product_id": p.id, "qty": it.qty, "price": p.price})
     if not any(sv.is_potato(allowed[i["product_id"]]) for i in items):
-        raise HTTPException(400, f"Возим только вместе с картошкой — добавьте от 2 сеток ({2 * settings.sack_kg} кг)")
+        raise HTTPException(400, f"Возим только вместе с картошкой — добавьте {sv.potato_min_text(list(allowed.values()))}")
     if rate_limited(client_ip(request)):
         raise HTTPException(429, "Слишком много заявок. Позвоните нам или попробуйте позже.")
 
@@ -149,6 +151,72 @@ async def notify_new_web_order(order_id: int, header: str):
         order = s.scalar(sv.order_query().where(Order.id == order_id))
         if order:
             await notify.notify_client(s, order, "accepted")
+
+
+# ---------- отзывы (/otzyv — QR на обороте визитки) ----------
+
+
+@router.get("/otzyv")
+def review_page():
+    if settings.review_url.startswith("https://"):
+        return RedirectResponse(settings.review_url)
+    return FileResponse(STATIC / "review.html", headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/api/public/review-info")
+def review_info():
+    phone = sv.fmt_phone(settings.contact_phone) if settings.contact_phone else ""
+    avito = settings.avito_url if settings.avito_url.startswith("https://") else ""
+    return dict(gift=settings.review_gift, phone=phone, avito_url=avito)
+
+
+@router.get("/api/public/reviews")
+def public_reviews(s: Session = Depends(get_db)):
+    """Отзывы, которые Артур разрешил показывать (кнопка в боте). Только имя без фамилии и телефона."""
+    rows = s.query(Review).filter(Review.public).order_by(Review.created_at.desc()).limit(50)
+    return [dict(name=(r.name.split() or ["Покупатель"])[0], rating=r.rating, text=r.text,
+                 date=sv.fmt_date(r.created_at.date())) for r in rows]
+
+
+class PublicReview(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(default="", max_length=30)
+    rating: int = Field(default=5, ge=1, le=5)
+    text: str = Field(default="", max_length=1500)
+    avito: bool = False  # «оставил отзыв на Авито» — тогда текст здесь необязателен
+    website: str = ""  # ловушка для ботов
+
+
+@router.post("/api/public/review")
+def post_review(body: PublicReview, request: Request, background: BackgroundTasks, s: Session = Depends(get_db)):
+    if body.website:
+        return {"ok": True}
+    if not body.text.strip() and body.rating >= 4 and not body.avito:
+        raise HTTPException(400, "Напишите пару слов — что понравилось")
+    if rate_limited(client_ip(request)):
+        raise HTTPException(429, "Слишком много отзывов подряд. Попробуйте позже.")
+    r = Review(name=body.name.strip(), phone=body.phone.strip(), rating=body.rating, text=body.text.strip(),
+               avito=body.avito)
+    s.add(r)
+    s.commit()
+    background.add_task(notify_review, r.id)
+    return {"ok": True, "gift": settings.review_gift}
+
+
+async def notify_review(review_id: int):
+    from app import bot as staff_bot
+
+    with SessionLocal() as s:
+        r = s.get(Review, review_id)
+        if not r or staff_bot.BOT is None:
+            return
+        text, kb = staff_bot.review_message(r)
+        ids = [u.tg_id for u in sv.all_users(s)]
+    for tg_id in ids:
+        try:
+            await staff_bot.BOT.send_message(tg_id, text, reply_markup=kb)
+        except Exception:
+            log.exception("review notify %s failed", tg_id)
 
 
 # ---------- перенос доставки (/r/<token>) ----------
@@ -248,23 +316,36 @@ def qr_svg(request: Request, s: str = ""):
     return HTMLResponse(svg, media_type="image/svg+xml")
 
 
+@router.get("/photos/{name}")
+def photo(name: str):
+    p = photos.path(name)
+    if not p:
+        raise HTTPException(404)
+    # имя файла меняется при каждой замене фото — можно кэшировать надолго
+    return FileResponse(p, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @router.get("/flyer", response_class=HTMLResponse)
 def flyer(request: Request, s: str = "", db: Session = Depends(get_db)):
     """Лист A4 с двумя листовками A5 (разрезать пополам). Печать: «Поделиться → Печать» или «Сохранить как PDF»."""
     link = order_link(request, s)
     qr = segno.make(link, error="m").svg_inline(scale=10, border=0)
     prices = []
-    for p in public_products(db):
+    items = public_products(db)
+    for p in items:
         unit = "кг" if p.unit == "кг" else "банка"
+        price = f"{sv.fmt_qty(p.price)} ₽/{unit}"
         note = f" <small>от {sv.fmt_qty(p.min_qty)} кг</small>" if p.min_qty else ""
-        prices.append(f"<li><span>{escape(p.emoji)} {escape(p.name)}{note}</span>"
-                      f"<b>{sv.fmt_qty(p.price)} ₽/{unit}</b></li>")
+        if sv.is_potato(p):  # картошку продаём сетками — цена за сетку крупно
+            note = f' <small class="line">сетка {settings.sack_kg} кг · {price}</small>'
+            price = f"{sv.fmt_money(p.price * settings.sack_kg)}/сетка"
+        prices.append(f"<li><span>{escape(p.emoji)} {escape(p.name)}{note}</span><b>{price}</b></li>")
     phone = sv.fmt_phone(settings.contact_phone) if settings.contact_phone else ""
     one = f"""
 <section class="a5">
   <div class="left">
     <h1>🥔 Картошка<br>с доставкой на дом</h1>
-    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Заказ от 2 сеток картошки (50 кг) — лук, морковь, свёклу и мёд добавим к ней</p>
+    <p class="sub">По городу и пригороду · каждый день, круглый год<br>Картошка {sv.potato_min_text(items)} — лук, морковь, свёклу и мёд добавим к ней</p>
     <ul class="prices">{''.join(prices)}</ul>
     <p class="pay">Оплата при получении: наличные или перевод</p>
   </div>
@@ -292,6 +373,8 @@ h1 {{ font-size: 27pt; line-height: 1.05; margin: 0 0 3mm; color: #2e5e1e; }}
 .prices {{ list-style: none; margin: 0; padding: 0; font-size: 12.5pt; }}
 .prices li {{ display: flex; justify-content: space-between; gap: 4mm; padding: 1.4mm 0; border-bottom: 1px dotted #ccc; }}
 .prices small {{ color: #777; font-size: 9pt; }}
+.prices small.line {{ display: block; }}
+.prices b {{ white-space: nowrap; }}
 .pay {{ margin-top: auto; font-size: 10.5pt; font-weight: 600; color: #2e5e1e; }}
 .right {{ width: 68mm; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
   background: #f4f8ef; border-radius: 6mm; padding: 6mm; }}
