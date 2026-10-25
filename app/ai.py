@@ -1,5 +1,6 @@
 """Голос/текст/скриншот → структурированные действия (заказ, расход, оплата)."""
 
+import asyncio
 import base64
 import io
 import json
@@ -11,6 +12,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session
 
+from app import pick_models
 from app import services as sv
 from app.config import settings
 from app.db import Client, Order, Product
@@ -26,6 +28,25 @@ def _client() -> AsyncOpenAI:
     if not settings.ai_api_key:
         raise AIError("ИИ не настроен (нет AI_API_KEY). Заказы можно добавлять в приложении.")
     return AsyncOpenAI(api_key=settings.ai_api_key, base_url=settings.ai_base_url or None)
+
+
+async def choose_models() -> None:
+    """Модели, не заданные явно (AI_MODEL / AI_STT_MODEL), выбираем из каталога сервиса.
+
+    Нужно там, где нет deploy.sh (Amvera): названия моделей в каталогах меняются.
+    """
+    auto = [f for f in ("ai_model", "ai_stt_model") if f not in settings.model_fields_set]
+    if not settings.ai_api_key or not auto:
+        return
+    try:
+        ids = await asyncio.to_thread(pick_models.fetch_ids, settings.ai_base_url, settings.ai_api_key)
+    except Exception as e:  # нет сети, неверный ключ — остаются значения по умолчанию
+        log.warning("Не удалось получить список моделей ИИ: %s", e)
+        return
+    for field, pick in (("ai_model", pick_models.pick_chat), ("ai_stt_model", pick_models.pick_stt)):
+        if field in auto and (model := pick(ids)):
+            setattr(settings, field, model)
+    log.info("Модели ИИ: текст=%s, голос=%s", settings.ai_model, settings.ai_stt_model)
 
 
 async def transcribe(audio: bytes, filename: str = "voice.ogg") -> str:

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import api, notify, public
+from app import ai, api, notify, public
 from app import services as sv
 from app.config import settings
 from app.db import SessionLocal
@@ -30,6 +30,7 @@ async def lifespan(_: FastAPI):
     scheduler = AsyncIOScheduler(timezone=settings.zone)
     scheduler.add_job(recurring_job, "interval", hours=1)
     recurring_job()
+    await ai.choose_models()
     polling, max_polling = None, None
     # вечером: маршрут на завтра и примерное время каждому клиенту
     scheduler.add_job(notify.evening_eta, "cron", hour=settings.evening_hour, minute=5, args=[SessionLocal])

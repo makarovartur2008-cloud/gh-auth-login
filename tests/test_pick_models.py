@@ -1,9 +1,4 @@
-import importlib.util
-from pathlib import Path
-
-spec = importlib.util.spec_from_file_location("pick_models", Path(__file__).parent.parent / "scripts" / "pick_models.py")
-pm = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(pm)
+from app import pick_models as pm
 
 
 def test_picks_cheap_chat_and_stt():
@@ -21,3 +16,33 @@ def test_old_names_still_work():
 def test_whisper_large_when_no_transcribe():
     assert pm.pick_stt(["openai/whisper-large-v3", "openai/whisper-large-v3-turbo"]) == "openai/whisper-large-v3-turbo"
     assert pm.pick_chat(["openai/whisper-large-v3"]) == ""
+
+
+def test_choose_models_only_fills_unset(monkeypatch):
+    import asyncio
+
+    from app import ai
+    from app.config import Settings
+
+    s = Settings(_env_file=None, ai_api_key="k", ai_stt_model="my-whisper")
+    monkeypatch.setattr(ai, "settings", s)
+    monkeypatch.setattr(pm, "fetch_ids", lambda base, key: ["gpt-5.4-mini", "gpt-5.4-nano", "openai/whisper-large-v3"])
+    asyncio.run(ai.choose_models())
+    assert s.ai_model == "gpt-5.4-nano"
+    assert s.ai_stt_model == "my-whisper"  # задано явно — не трогаем
+
+
+def test_choose_models_keeps_defaults_when_offline(monkeypatch):
+    import asyncio
+
+    from app import ai
+    from app.config import Settings
+
+    def boom(base, key):
+        raise OSError("нет сети")
+
+    s = Settings(_env_file=None, ai_api_key="k")
+    monkeypatch.setattr(ai, "settings", s)
+    monkeypatch.setattr(pm, "fetch_ids", boom)
+    asyncio.run(ai.choose_models())
+    assert (s.ai_model, s.ai_stt_model) == ("gpt-4o-mini", "whisper-1")
