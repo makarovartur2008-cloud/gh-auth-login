@@ -331,7 +331,22 @@ async function orderForm(order, preset = {}) {
   }
   drawItems();
 
-  async function save() {
+  let saving = false;
+  async function save(e) {
+    // двойное нажатие на «Сохранить» создавало два одинаковых заказа
+    if (saving) return;
+    saving = true;
+    const btn = e?.currentTarget;
+    if (btn) btn.disabled = true;
+    try {
+      await saveOrder();
+    } finally {
+      saving = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function saveOrder() {
     const body = { date: dateIn.value, slot: slotIn.value, notes: notesIn.value, via_friend: friendIn.checked,
       items: items.filter((i) => i.qty > 0).map((i) => ({ product_id: i.product_id, qty: i.qty, price: i.price })) };
     if (isNew) {
