@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4o-mini"
     ai_stt_model: str = "whisper-1"
 
-    tz: str = "Europe/Moscow"
+    tz: str = "Europe/Samara"  # Самара: UTC+4, на час больше Москвы
     db_path: str = "data/app.db"
 
     morning_hour: int = 8
