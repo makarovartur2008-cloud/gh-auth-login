@@ -36,3 +36,10 @@ def test_app_opens_via_inline_button(monkeypatch):
     app_btn = kb.keyboard[-1][0]
     assert app_btn.text == staff_bot.BTN_APP and app_btn.web_app is None
     assert staff_bot.app_kb().inline_keyboard[0][0].web_app.url == "https://example.org/"
+
+
+def test_main_keyboard_stays_visible():
+    """Кнопки «Сегодня/Завтра» всегда на экране, а не прячутся за значок клавиатуры."""
+    kb = staff_bot.main_kb()
+    assert kb.is_persistent
+    assert [b.text for b in kb.keyboard[0]] == [staff_bot.BTN_TODAY, staff_bot.BTN_TOMORROW]
