@@ -64,7 +64,8 @@ def main_kb() -> ReplyKeyboardMarkup:
         # обычная кнопка: Telegram не передаёт данные пользователя (initData) в приложение,
         # открытое кнопкой нижней клавиатуры, — поэтому открываем его inline-кнопкой (app_cmd)
         rows.append([KeyboardButton(text=BTN_APP)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+    # is_persistent: кнопки «Сегодня/Завтра» не сворачиваются, когда Telegram прячет клавиатуру
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
 def app_kb() -> InlineKeyboardMarkup:
